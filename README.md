@@ -1,7 +1,7 @@
 # Haier Laundry Centre card
 
 A Home Assistant dashboard card for the Haier **HWD140-BD14LCGNU1** twin washer + dryer laundry
-centre, driven by the [haismart](https://github.com/enapt/haismart-local) integration.
+centre, driven by the [haismart](https://github.com/kucau0901/haismart-local) integration (a fork of [enapt/haismart-local](https://github.com/enapt/haismart-local) with washer-dryer support).
 
 It answers one question at a glance, from across the room: **is it done, and when?** Each drum shows
 a single clear answer (a finish *clock time*, not a countdown), the phase it is in, a short progress
