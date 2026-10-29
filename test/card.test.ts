@@ -684,6 +684,49 @@ describe("haismart-laundry-card", () => {
     expect(root(el).querySelector('.label-row ha-icon[icon="mdi:lock"]')).not.toBeNull();
   });
 
+  it("before the start, the dryer's heat and dryness are pills that open their pickers", async () => {
+    const el = await mount(washingScenario({ dryerRemoteCtrValid: true }));
+    const editable = [...root(el).querySelectorAll<HTMLButtonElement>("button.detail.editable")];
+    expect(editable.map((b) => b.textContent!.trim())).toEqual(["High heat", "Cupboard dry"]);
+    expect(editable[0].getAttribute("aria-haspopup")).toBe("dialog");
+    expect(editable[0].getAttribute("aria-label")).toBe("Drying heat High heat, change");
+    expect(editable[0].querySelector('ha-icon[icon="mdi:pencil-outline"]')).not.toBeNull();
+    const opened: string[] = [];
+    el.addEventListener("hass-more-info", (e) => opened.push((e as CustomEvent).detail.entityId));
+    editable[1].click();
+    expect(opened).toEqual(["select.laundry_centre_dryer_dry_level"]);
+    // The running washer's row stays plain.
+    expect(root(el).querySelectorAll(".details.editing")).toHaveLength(1);
+  });
+
+  it("confirm_start lists the heat and dryness the dryer will start with", async () => {
+    const call = vi.fn(async () => undefined);
+    // The capture has the dryer door open, which gates Start; closed here.
+    const hass = washingScenario({ dryerRemoteCtrValid: true, dryerDoorStatus: false });
+    hass.callService = call;
+    const el = await mount(hass, { confirm_start: true });
+    vi.advanceTimersByTime(10_000);
+    btn(el, "dryer", "start")!.click();
+    await el.updateComplete;
+    const rows = [...root(el).querySelectorAll("dialog .rows li")].map((li) => li.textContent!.trim());
+    expect(rows.slice(0, 3)).toEqual(["AI Dry", "High heat", "Cupboard dry"]);
+    expect(call).not.toHaveBeenCalled();
+    // The heat changes at the panel while the dialog is open: a fresh confirm is needed.
+    const heat = Object.values(hass.states).find((s) => s.attributes.haier_attribute === "dryerTempLevel")!;
+    el.hass = {
+      ...hass,
+      states: { ...hass.states, [heat.entity_id]: { ...heat, state: "Low temperature", attributes: { ...heat.attributes, haier_value: 2 } } },
+    };
+    await flush(el);
+    const dlg = root(el).querySelector("dialog")!;
+    expect(dlg.textContent).toContain("Low heat");
+    const confirm = dlg.querySelector<HTMLButtonElement>("[data-confirm]")!;
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    confirm.click();
+    await flush(el);
+    expect(call).not.toHaveBeenCalled();
+  });
+
   it("show_details: false hides the row", async () => {
     const el = await mount(washingScenario(), { show_details: false });
     expect(root(el).querySelector(".details")).toBeNull();

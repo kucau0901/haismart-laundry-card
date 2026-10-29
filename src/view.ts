@@ -51,6 +51,8 @@ export interface DetailView {
   /** Spoken form, with what the value is ("spin speed 1000 rpm"). */
   spoken: string;
   entity?: string;
+  /** Can be changed before the start: a select or number, remote control on. Opens its picker. */
+  editable: boolean;
 }
 
 export interface ViewCtx {
@@ -111,8 +113,12 @@ export function detailView(lang: Lang, d: DrumDetail): DetailView {
     text,
     spoken: word ? text : t(lang, `detail.${d.key}`, { v: text }),
     entity: d.entity,
+    editable: false,
   };
 }
+
+/** Settings the appliance lets you change (a select or number); the load is only ever measured. */
+const isSetting = (d: DrumDetail) => d.key !== "load" && (d.domain === "select" || d.domain === "number");
 
 /**
  * The details row for a drum, or nothing. Off and stale drums have no current settings to show.
@@ -125,7 +131,19 @@ function detailsFor(d: DrumModel, ctx: ViewCtx): DetailView[] {
   const list = d.details.filter(
     (x) => !(d.status === "idle" && x.key === "programme") && (x.key !== "load" || during),
   );
-  return list.map((x) => detailView(ctx.lang, x));
+  // Before the start, with remote control on, the settings are what the Start button will run with:
+  // they read as editable, like the programme chip. During a cycle they are plain facts.
+  const editable = d.status === "idle" && ctx.controlsVisible && d.remote === true;
+  return list.map((x) => {
+    const v = detailView(ctx.lang, x);
+    if (!editable || !x.entity || !isSetting(x)) return v;
+    return { ...v, editable: true, spoken: t(ctx.lang, "detail.change", { v: v.spoken }) };
+  });
+}
+
+/** The settings a Start will run with, for its confirmation dialog: programme and load left out. */
+export function startSettings(lang: Lang, d: DrumModel): DetailView[] {
+  return d.details.filter((x) => x.key !== "programme" && x.key !== "load").map((x) => detailView(lang, x));
 }
 
 export function noticeText(lang: Lang, n: Notice): string {

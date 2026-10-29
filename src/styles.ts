@@ -484,6 +484,9 @@ export const cardStyles = css`
     flex-wrap: wrap;
     gap: 6px 14px;
   }
+  .details.editing {
+    gap: 8px;
+  }
   .details li {
     min-width: 0;
     max-width: 100%;
@@ -512,6 +515,18 @@ export const cardStyles = css`
   }
   .detail:disabled {
     cursor: default;
+  }
+  /* Before the start: a setting you can change, drawn like the programme chip. */
+  .detail.editable {
+    --hlc-state: var(--hlc-running);
+    min-height: 28px;
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--hlc-state) 14%, transparent);
+  }
+  .detail.editable::after {
+    /* 36px-tall hit area: half of the 8px gap each way, so wrapped pills never overlap. */
+    inset: -4px -2px;
   }
   .detail ha-icon {
     --mdc-icon-size: 16px;
@@ -977,6 +992,7 @@ export const cardStyles = css`
     .tile.tinted,
     .layout-stacked .tile.tinted,
     .chip,
+    .detail.editable,
     .strip,
     .banner,
     .alert,

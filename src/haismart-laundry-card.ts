@@ -525,7 +525,15 @@ export class HaismartLaundryCard extends LitElement {
   }
 
   private _signature(d: DrumModel, cmd: Command): string {
-    return `${d.status}|${this._gate(d, cmd) ?? ""}|${d.programme.value ?? ""}`;
+    // A Start lists the settings it will run with, so a change to any of them needs a fresh confirm.
+    const settings =
+      cmd === "start"
+        ? d.details
+            .filter((x) => x.key !== "programme" && x.key !== "load")
+            .map((x) => `${x.key}=${x.value}`)
+            .join(",")
+        : "";
+    return `${d.status}|${this._gate(d, cmd) ?? ""}|${d.programme.value ?? ""}|${settings}`;
   }
 
   private _send(drum: DrumKey, cmd: Command): void {

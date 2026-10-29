@@ -3,7 +3,7 @@
 // Every fixture in test/fixtures/scenarios.ts is shown, plus remote-on variants of the states
 // whose controls differ, and two interactive scenarios.
 
-import { SCENARIOS, scenario } from "../test/fixtures/scenarios";
+import { SCENARIOS, scenario, washingScenario } from "../test/fixtures/scenarios";
 import { buildHass } from "../src/mock/build-hass";
 import type { HomeAssistant } from "../src/types";
 
@@ -50,6 +50,15 @@ const EXTRA: Array<[string, string, () => HomeAssistant]> = [
     remoteOn({ dryerCyclePhase: 7, remainingAntiCreaseTime: 25, dryerRemainingDryTime: 0 })],
   ["22_no_programme", "Remote on, no programme selected: the hint shows.", () =>
     remoteOn({ washerUnifiedProgramSettings: 0 })],
+  ["23_ready_to_start", "Both idle, remote on, doors closed: the settings are pills you can change before Start.", () =>
+    washingScenario({
+      laundryCyclePhase: 0,
+      washerRunningMode: 2,
+      washerDoorLockStatus: false,
+      dryerDoorStatus: false,
+      washerRemoteCtrValid: true,
+      dryerRemoteCtrValid: true,
+    })],
 ];
 
 /** A callService that behaves like the haismart integration with remote control on. */

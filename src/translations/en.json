@@ -325,6 +325,7 @@
   "fault.with_code": "{fault} · code {code}",
   "compact.attention": "Machine reports a problem",
   "ed.show_details": "Show programme and settings",
+  "detail.change": "{v}, change",
   "detail.list": "{Drum} settings",
   "detail.programme": "Programme {v}",
   "detail.temp": "Temperature {v}",

@@ -71,6 +71,12 @@ describe.each(Object.entries(THEMES))("%s theme", (_name, th) => {
     expect(contrast(c.text, tint(c.primary, 12, c.surface))).toBeGreaterThanOrEqual(4.5);
   });
 
+  it("editable setting pill (14% tint, like the programme chip): text >= 4.5, muted icons >= 3", () => {
+    const pill = tint(c.primary, 14, c.surface);
+    expect(contrast(c.text, pill)).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(c.secondary, pill)).toBeGreaterThanOrEqual(3);
+  });
+
   it("notice marker and warning icons (strong warning) >= 3 on the card", () => {
     expect(contrast(mix(c.warning, MIX.strong, c.text), c.surface)).toBeGreaterThanOrEqual(3);
   });

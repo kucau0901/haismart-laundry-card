@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { Command, DrumModel } from "../model/derive";
 import { drumVars, t, type Lang } from "../localize";
 import { fmtDuration } from "../time";
+import { startSettings } from "../view";
 
 export interface DialogState {
   drum: DrumModel["key"];
@@ -58,6 +59,8 @@ export function dialogCopy(lang: Lang, d: DrumModel, cmd: Command): DialogCopy {
       };
     default: {
       const rows: Array<{ icon?: string; text: string }> = [{ text: programme }];
+      // What it will run with, so a Start is never blind to the heat or spin it was left on.
+      for (const s of startSettings(lang, d)) rows.push({ icon: s.icon, text: s.text });
       if (d.idleDuration) rows.push({ text: t(lang, "dlg.takes_about", { d: fmtDuration(d.idleDuration, lang) }) });
       if (d.doorOpen === false) rows.push({ icon: "mdi:check", text: t(lang, "dlg.door_closed") });
       return {

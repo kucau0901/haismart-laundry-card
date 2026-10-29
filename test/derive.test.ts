@@ -21,7 +21,7 @@ import {
   type ModelMemory,
 } from "../src/model";
 import { buildHass, MOCK_DEVICE_ID } from "../src/mock/build-hass";
-import { drumView, headline, type ViewCtx } from "../src/view";
+import { drumView, headline, startSettings, totalsLine, type ViewCtx } from "../src/view";
 import { fmtClock, fmtDuration, timeCtx } from "../src/time";
 import type { HomeAssistant } from "../src/types";
 
@@ -858,6 +858,70 @@ describe("details row", () => {
     const vd = drumView(md, md.washer, vctx(done));
     expect(vd.support).toContain("Door still locked");
     expect(vd.aria.match(/door (still )?locked/gi)).toHaveLength(1);
+  });
+
+  it("before the start, with remote on, the settings read as editable; during a cycle they do not", () => {
+    // The 19:39 start: dryer idle on AI Dry, remote control just turned on at the panel.
+    const hass = washingScenario({ dryerRemoteCtrValid: true });
+    const m = modelOf(hass);
+    expect(m.dryer.details.find((x) => x.key === "heat")?.domain).toBe("select");
+    const v = drumView(m, m.dryer, vctx(hass));
+    expect(v.details.map((x) => [x.text, x.editable])).toEqual([
+      ["High heat", true],
+      ["Cupboard dry", true],
+    ]);
+    expect(v.details[0].spoken).toBe("Drying heat High heat, change");
+    expect(drumView(m, m.dryer, vctx(hass, "ms")).details[1].spoken).toBe("Tahap kering Kering untuk disimpan, tukar");
+    // Remote off, or controls hidden: plain facts, as before.
+    const off = washingScenario();
+    const mo = modelOf(off);
+    expect(drumView(mo, mo.dryer, vctx(off)).details.some((x) => x.editable)).toBe(false);
+    expect(drumView(m, m.dryer, { ...vctx(hass), controlsVisible: false }).details.some((x) => x.editable)).toBe(false);
+    // The running washer, remote on: nothing to change mid-cycle; and the load is never a setting.
+    const running = washingScenario({ washerRemoteCtrValid: true });
+    const mr = modelOf(running);
+    expect(drumView(mr, mr.washer, vctx(running)).details.some((x) => x.editable)).toBe(false);
+    const idle = washingScenario({ laundryCyclePhase: 0, washerRunningMode: 2, washerRemoteCtrValid: true });
+    const mi = modelOf(idle);
+    expect(drumView(mi, mi.washer, vctx(idle)).details.map((x) => [x.key, x.editable])).toEqual([
+      ["temp", true],
+      ["spin", true],
+    ]);
+  });
+
+  it("a Start is confirmed with the settings it will run with, not the programme or load", () => {
+    const hass = washingScenario({ dryerRemoteCtrValid: true });
+    const m = modelOf(hass);
+    expect(startSettings("en", m.dryer).map((x) => x.text)).toEqual(["High heat", "Cupboard dry"]);
+    expect(startSettings("ms", m.washer).map((x) => x.text)).toEqual(["30°C", "1,000 rpm"]);
+  });
+
+  it("the total electricity has no unit on the entity, so the published kWh is used", () => {
+    const hass = washingScenario({
+      laundryCyclePhase: 0,
+      washerRunningMode: 2,
+      currentWaterUsed: 0,
+      washerCurrentElectricityUsed: 0,
+    });
+    const m = modelOf(hass);
+    expect(hass.states[m.totals.energy.entity!].attributes.unit_of_measurement).toBeUndefined();
+    expect(m.totals.energy.unit).toBe("kWh");
+    expect(totalsLine(m, "en")?.text).toBe("Total 150 L · 0.31 kWh · 1 wash");
+    // An older component (labels, no haier_value) gets no assumed unit.
+    const legacy = washingScenario(
+      { laundryCyclePhase: 0, washerRunningMode: 2, currentWaterUsed: 0, washerCurrentElectricityUsed: 0 },
+      { legacy: true },
+    );
+    const ml = modelOf(legacy);
+    expect(ml.legacy).toBe(true);
+    expect(legacy.states[ml.totals.energy.entity!].attributes.unit_of_measurement).toBeUndefined();
+    expect(ml.totals.energy.value).toBe(0.31);
+    expect(ml.totals.energy.unit).toBeUndefined();
+    clearIndexCache();
+    // An entity's own unit still wins.
+    hass.states[m.totals.energy.entity!].attributes.unit_of_measurement = "Wh";
+    clearIndexCache();
+    expect(modelOf(hass).totals.energy.unit).toBe("Wh");
   });
 
   it("an older component's converted reading keeps its own unit", () => {

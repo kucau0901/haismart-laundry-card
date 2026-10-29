@@ -325,6 +325,7 @@
   "fault.with_code": "{fault} · kod {code}",
   "compact.attention": "Mesin melaporkan masalah",
   "ed.show_details": "Papar program dan tetapan",
+  "detail.change": "{v}, tukar",
   "detail.list": "Tetapan {drum}",
   "detail.programme": "Program {v}",
   "detail.temp": "Suhu {v}",

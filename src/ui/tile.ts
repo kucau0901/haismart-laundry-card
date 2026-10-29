@@ -347,20 +347,23 @@ export function renderDetails(ctx: RenderCtx, d: DrumModel): TemplateResult | ty
   const items = ctx.views[d.key].details;
   if (!items.length) return nothing;
   const vars = drumVars(ctx.lang, d.key);
-  return html`<ul class="details" aria-label=${t(ctx.lang, "detail.list", vars)}>
+  const editing = items.some((x) => x.editable);
+  return html`<ul class="details ${editing ? "editing" : ""}" aria-label=${t(ctx.lang, "detail.list", vars)}>
     ${items.map(
       (x) => html`<li>
         <button
-          class="detail"
+          class="detail ${x.editable ? "editable" : ""}"
           type="button"
           data-detail=${x.key}
           data-focus-key="detail-${d.key}-${x.key}"
           aria-label=${x.spoken}
+          aria-haspopup=${ifDefined(x.editable ? "dialog" : undefined)}
           title=${x.spoken}
           ?disabled=${!x.entity}
           @click=${() => ctx.on.moreInfo(x.entity)}
         >
           <ha-icon .icon=${x.icon} aria-hidden="true"></ha-icon><span>${x.text}</span>
+          ${x.editable ? html`<ha-icon class="edit" icon="mdi:pencil-outline" aria-hidden="true"></ha-icon>` : nothing}
         </button>
       </li>`,
     )}

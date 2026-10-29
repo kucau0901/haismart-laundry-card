@@ -63,6 +63,8 @@ export interface DrumDetail {
    * converted (°F, lb). The number is then that converted reading, so the unit must travel with it. */
   unit?: string;
   entity?: string;
+  /** The entity's domain: a select or number can be changed from its more-info dialog. */
+  domain?: string;
 }
 
 export interface DrumModel {
@@ -366,7 +368,8 @@ const ts = (s: string | undefined): number | undefined => {
  */
 function drumDetails(r: Reader, A: DrumAttrs, programme: ProgrammeInfo): DrumDetail[] {
   const out: DrumDetail[] = [];
-  if (programme.value) out.push({ key: "programme", value: programme.value, label: programme.label, entity: programme.entity });
+  if (programme.value)
+    out.push({ key: "programme", value: programme.value, label: programme.label, entity: programme.entity, domain: programme.domain });
   for (const [key, attr] of A.details) {
     const rd = r.read(attr);
     const v = rd.value;
@@ -383,7 +386,7 @@ function drumDetails(r: Reader, A: DrumAttrs, programme: ProgrammeInfo): DrumDet
     }
     const uom = rd.entity?.attributes?.unit_of_measurement;
     const unit = rd.fromLabel && typeof uom === "string" && uom ? uom : undefined;
-    out.push({ key, value, label, unit, entity: rd.eid });
+    out.push({ key, value, label, unit, entity: rd.eid, domain: rd.eid ? domainOf(rd.eid) : undefined });
   }
   return out;
 }
@@ -732,12 +735,14 @@ export function derive(hass: HomeAssistant, index: DeviceIndex, opts: DeriveOpti
   const washer = drum("washer", phaseW, phaseD);
   const dryer = drum("dryer", phaseD, phaseW);
 
-  const total = (attr: string): TotalValue => {
+  /** `published`: the unit the appliance reports in, for entities that carry none (the total
+   * electricity sensor has no unit_of_measurement, so "0.5" would stand alone). */
+  const total = (attr: string, published?: string): TotalValue => {
     const rd = r.read(attr);
     const unit = rd.entity?.attributes?.unit_of_measurement;
     return {
       value: typeof rd.value === "number" ? rd.value : undefined,
-      unit: typeof unit === "string" && unit ? unit : undefined,
+      unit: typeof unit === "string" && unit ? unit : rd.fromLabel ? undefined : published,
       entity: rd.eid,
     };
   };
@@ -758,10 +763,10 @@ export function derive(hass: HomeAssistant, index: DeviceIndex, opts: DeriveOpti
     legacyUnmapped: r.legacyUnmapped,
     totals: {
       water: total("totalWaterUsed"),
-      energy: total("washerTotalElectricityUsed"),
+      energy: total("washerTotalElectricityUsed", "kWh"),
       cycles: total("totalWashCycle"),
       cycleWater: total("currentWaterUsed"),
-      cycleEnergy: total("washerCurrentElectricityUsed"),
+      cycleEnergy: total("washerCurrentElectricityUsed", "kWh"),
     },
     now,
   };

@@ -74,7 +74,7 @@ order: washer_first     # washer_first | dryer_first
 collapse_idle: true     # stacked layout: fold the idle drum while the other runs
 show_notices: true
 show_stepper: true
-show_details: true      # programme, temperature, spin and load (dryer: heat, dryness, load)
+show_details: true      # programme, temperature, spin and load (dryer: heat, dryness, load); before a start with remote on, tap one to change it
 show_totals: false      # water and energy for this cycle, or lifetime totals
 show_controls: auto     # auto | never
 confirm_start: false    # ask before Start (Cancel always asks; that can't be turned off)
