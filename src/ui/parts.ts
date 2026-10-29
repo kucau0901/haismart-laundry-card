@@ -27,16 +27,17 @@ export function renderStepper(lang: Lang, steps: StepView[] | null): TemplateRes
   if (!steps || !steps.length) return nothing;
   return html`<ol class="stepper" aria-label=${t(lang, "a11y.progress")}>
     ${steps.map(
-      (s, i) => html`<li class="step ${s.state}">
+      (s, i) => html`<li class="step ${s.state}" aria-current=${s.state === "current" ? "step" : nothing}>
         <span class="mark" aria-hidden="true"
           ><span class="pt"></span>${i < steps.length - 1 ? html`<span class="ln"></span>` : nothing}</span
         >
-        <span class="lbl">${t(lang, `step.${s.key}`)}</span>
-        <span class="sr-only">${t(lang, `a11y.step_${s.state}`)}</span>
+        <span class="lbl">${t(lang, `step.${s.key}`)}<span class="sr-only">, ${t(lang, `a11y.step_${s.state}`)}</span></span>
       </li>`,
     )}
   </ol>`;
 }
+
+const plural = (lang: Lang, base: string, n: number) => t(lang, `${base}_${n === 1 ? "one" : "other"}`, { n });
 
 export function renderNotices(ctx: RenderCtx, d: DrumModel): TemplateResult | typeof nothing {
   if (!ctx.config.show_notices || !d.notices.length) return nothing;
@@ -58,8 +59,10 @@ export function renderNotices(ctx: RenderCtx, d: DrumModel): TemplateResult | ty
       ? html`<button
           class="chip t-muted"
           type="button"
+          data-focus-key="notices-more-${d.key}"
           aria-expanded=${open ? "true" : "false"}
           aria-controls="notices-${d.key}"
+          aria-label=${open ? t(ctx.lang, "notice.less") : plural(ctx.lang, "notice.more_label", more)}
           @click=${() => ctx.on.toggle("noticesOpen", d.key)}
         >
           <span>${open ? t(ctx.lang, "notice.less") : t(ctx.lang, "notice.more", { n: more })}</span>
@@ -68,43 +71,65 @@ export function renderNotices(ctx: RenderCtx, d: DrumModel): TemplateResult | ty
   </div>`;
 }
 
-export function renderFaultBanner(ctx: RenderCtx, announce: boolean): TemplateResult | typeof nothing {
+/** The fault text with its own code when faults and codes pair up one to one. */
+export function faultLines(lang: Lang, f: { faults: string[]; codeList: string[] }): { lines: string[]; shared?: string } {
+  if (f.faults.length && f.faults.length === f.codeList.length)
+    return { lines: f.faults.map((x, i) => t(lang, "fault.with_code", { fault: x, code: f.codeList[i] })) };
+  return {
+    lines: f.faults.length ? f.faults : [t(lang, "fault.no_detail")],
+    shared: f.codeList.length ? t(lang, "fault.code", { code: f.codeList.join(", ") }) : undefined,
+  };
+}
+
+/**
+ * Machine-wide fault banner. Plain container (no role): the announcement goes through the card's
+ * persistent role=alert region, and the actions are real buttons outside any live region.
+ */
+export function renderFaultBanner(ctx: RenderCtx): TemplateResult | typeof nothing {
   const f = ctx.model.fault;
   if (!f.on || ctx.model.machineOff) return nothing;
   const { lang } = ctx;
-  const first = f.faults[0];
-  const rest = f.faults.slice(1);
-  return html`<div class="banner-wrap">
-    <div
-      class="banner t-fault"
-      role="button"
-      tabindex="0"
-      @click=${() => ctx.on.moreInfo(f.entity)}
-      @keydown=${keyActivate(() => ctx.on.moreInfo(f.entity))}
-    >
-      <ha-icon icon="mdi:alert-circle" aria-hidden="true"></ha-icon>
-      <div class="body" role=${announce ? "alert" : nothing}>
-        <span class="title-line">${t(lang, "fault.title")}</span>
-        <span>${first ?? t(lang, "fault.no_detail")}</span>
-        ${ctx.ui.faultMore && rest.length
-          ? html`<ul id="fault-more">
-              ${rest.map((x) => html`<li>${x}</li>`)}
-            </ul>`
+  const { lines, shared } = faultLines(lang, f);
+  const first = lines[0];
+  const rest = lines.slice(1);
+  return html`<div class="banner t-fault">
+    <ha-icon icon="mdi:alert-circle" aria-hidden="true"></ha-icon>
+    <div class="body">
+      <span class="title-line">${t(lang, "fault.title")}</span>
+      <span>${first}</span>
+      ${ctx.ui.faultMore && rest.length
+        ? html`<ul id="fault-more">
+            ${rest.map((x) => html`<li>${x}</li>`)}
+          </ul>`
+        : nothing}
+      ${shared ? html`<span class="sub">${shared}</span>` : nothing}
+      <div class="actions">
+        ${f.entity
+          ? html`<button
+              class="btn tonal"
+              type="button"
+              data-focus-key="fault-details"
+              aria-haspopup="dialog"
+              @click=${() => ctx.on.moreInfo(f.entity)}
+            >
+              ${t(lang, "fault.details")}
+            </button>`
           : nothing}
-        ${f.codes ? html`<span class="sub">${t(lang, "fault.code", { code: f.codes })}</span>` : nothing}
+        ${rest.length
+          ? html`<button
+              class="link-btn"
+              type="button"
+              data-focus-key="fault-more"
+              aria-expanded=${ctx.ui.faultMore ? "true" : "false"}
+              aria-controls="fault-more"
+              aria-label=${ctx.ui.faultMore ? t(lang, "notice.less") : plural(lang, "fault.more_label", rest.length)}
+              @click=${() => ctx.on.toggleFaultMore()}
+            >
+              ${ctx.ui.faultMore ? t(lang, "notice.less") : t(lang, "fault.more", { n: rest.length })}
+            </button>`
+          : nothing}
       </div>
     </div>
-    ${rest.length
-      ? html`<button
-          class="disclose"
-          type="button"
-          aria-expanded=${ctx.ui.faultMore ? "true" : "false"}
-          aria-controls="fault-more"
-          @click=${() => ctx.on.toggleFaultMore()}
-        >
-          ${t(lang, "fault.more", { n: rest.length })}
-        </button>`
-      : nothing}
   </div>`;
 }
 
@@ -124,7 +149,7 @@ export function renderOffBlock(ctx: RenderCtx, variant: "collapse" | "stacked" |
   const since =
     model.offSince !== undefined ? t(lang, "off.since", { time: fmtPastClock(model.offSince, ctx.now, ctx.viewCtx.time) }) : "";
   const explain = model.offReason === "power" ? t(lang, "off.explain_power") : t(lang, "off.explain");
-  return html`<div class="off-block ${variant === "collapse" ? "collapse" : ""}" role="status">
+  return html`<div class="off-block ${variant === "collapse" ? "collapse" : ""}" role="status" tabindex="-1" data-focus-key="off">
     <ha-icon icon="mdi:power-sleep" aria-hidden="true"></ha-icon>
     <div class="body">
       <span class="off-title">${t(lang, "off.title")}</span>
@@ -147,7 +172,12 @@ export function renderErrorStrip(ctx: RenderCtx, drum: DrumKey): TemplateResult 
       <span>${t(lang, st.error.key, vars)}</span>
       ${open && st.error.detail ? html`<span class="raw" id="err-raw-${drum}">${st.error.detail}</span>` : nothing}
       <div class="actions">
-        <button class="btn tonal" type="button" @click=${(e: Event) => ctx.on.retry(drum, e.currentTarget as HTMLElement)}>
+        <button
+          class="btn tonal"
+          type="button"
+          data-focus-key="strip-${drum}"
+          @click=${(e: Event) => ctx.on.retry(drum, e.currentTarget as HTMLElement)}
+        >
           ${t(lang, "err.retry")}
         </button>
         ${st.error.detail
@@ -168,6 +198,7 @@ export function renderErrorStrip(ctx: RenderCtx, drum: DrumKey): TemplateResult 
       type="button"
       aria-label=${t(lang, "ctl.dismiss")}
       title=${t(lang, "ctl.dismiss")}
+      data-focus-key="strip-${drum}"
       @click=${() => ctx.on.dismiss(drum)}
     >
       <ha-icon icon="mdi:close" aria-hidden="true"></ha-icon>

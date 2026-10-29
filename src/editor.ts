@@ -30,7 +30,9 @@ const select = (lang: Lang, prefix: string, values: string[]) => ({
 
 export function editorSchema(lang: Lang) {
   return [
-    { name: "device_id", selector: { device: { integration: "haismart" } } },
+    // Current selector form (a filter list). The integration filter still lists every haismart
+    // device (air conditioners too), so the helper text names the laundry centres detected.
+    { name: "device_id", selector: { device: { filter: [{ integration: "haismart" }] } } },
     { name: "title", selector: { text: {} } },
     { name: "layout", selector: select(lang, "ed.layout", ["auto", "full", "stacked", "compact"]) },
     { name: "time_display", selector: select(lang, "ed.time", ["both", "finish", "remaining"]) },
@@ -84,6 +86,7 @@ export interface DetectedRow {
 export function detectedRows(hass: HomeAssistant, config: LaundryCardConfig, lang: Lang): DetectedRow[] {
   const rows: DetectedRow[] = [];
   const res = resolveDevice(hass, config);
+  const laundry = findLaundryDevices(hass);
   if (res.kind !== "ok") return [{ text: t(lang, "det.none"), level: "warning" }];
   const id = res.deviceId;
   const index = buildIndex(hass, id);
@@ -108,7 +111,7 @@ export function detectedRows(hass: HomeAssistant, config: LaundryCardConfig, lan
   );
   rows.push({ text: t(lang, m.legacy ? "det.legacy" : "det.full"), level: m.legacy ? "warning" : "ok" });
   rows.push({ text: t(lang, "det.fault", { found: found(!!index.fault) }), level: "info" });
-  if (!config.device_id && findLaundryDevices(hass).length >= 2) rows.push({ text: t(lang, "det.multi"), level: "warning" });
+  if (!config.device_id && laundry.length >= 2) rows.push({ text: t(lang, "det.multi"), level: "warning" });
   if (m.controlsExist) {
     rows.push({ text: t(lang, "det.hidden"), level: "info" });
     if (m.washer.remote === false && m.dryer.remote === false)
@@ -124,6 +127,9 @@ export class HaismartLaundryCardEditor extends LitElement {
   };
   hass?: HomeAssistant;
   private _config?: LaundryCardConfig;
+  /** Computed once per hass/config change, not inside each ha-form helper callback. */
+  private _rows: DetectedRow[] = [];
+  private _helperDevice = "";
 
   static override styles = css`
     .detected {
@@ -179,14 +185,21 @@ export class HaismartLaundryCardEditor extends LitElement {
     return k ? t(this._lang, k) : s.name;
   };
 
+  protected override willUpdate(): void {
+    if (!this.hass || !this._config) return;
+    this._rows = detectedRows(this.hass, this._config, this._lang);
+    const hass = this.hass;
+    this._helperDevice = findLaundryDevices(hass)
+      .map((id) => deviceDisplayName(hass, id))
+      .join(", ");
+  }
+
   private _computeHelper = (s: { name: string }) => {
     const lang = this._lang;
-    if (s.name === "device_id") {
-      const res = this.hass ? resolveDevice(this.hass, {}) : undefined;
-      return res?.kind === "ok" && this.hass
-        ? t(lang, "ed.device_helper", { name: deviceDisplayName(this.hass, res.deviceId) })
+    if (s.name === "device_id")
+      return this._helperDevice
+        ? t(lang, "ed.device_helper", { name: this._helperDevice })
         : t(lang, "ed.device_helper_none");
-    }
     if (s.name === "layout") return t(lang, "ed.layout_helper");
     if (s.name === "confirm_start") return t(lang, "ed.confirm_start_helper");
     return undefined;
@@ -198,14 +211,16 @@ export class HaismartLaundryCardEditor extends LitElement {
     const next: LaundryCardConfig = { type: this._config?.type ?? "custom:haismart-laundry-card" };
     for (const [k, v] of Object.entries(value)) {
       if (k === "type") continue;
-      if (v === undefined || v === "" && k !== "title") continue;
+      // An emptied field (title included) means "default": drop the key.
+      if (v === undefined || (typeof v === "string" && !v.trim())) continue;
       if (k in EDITOR_DEFAULTS && EDITOR_DEFAULTS[k] === v) continue;
       if (k === "tap_action" && (v as { action?: string })?.action === "more-info" && Object.keys(v as object).length === 1)
         continue;
       next[k] = v;
     }
     // Keep unknown keys the form does not know about.
-    for (const [k, v] of Object.entries(this._config ?? {})) if (!(k in next) && !(k in value) && k !== "type") next[k] = v;
+    for (const [k, v] of Object.entries(this._config ?? {}))
+      if (!(k in next) && !(k in value) && !(k in LABEL_KEYS) && k !== "type") next[k] = v;
     this._config = next;
     this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: next }, bubbles: true, composed: true }));
   }
@@ -214,7 +229,7 @@ export class HaismartLaundryCardEditor extends LitElement {
     if (!this.hass || !this._config) return nothing;
     const lang = this._lang;
     const data = { ...EDITOR_DEFAULTS, ...this._config };
-    const rows = detectedRows(this.hass, this._config, lang);
+    const rows = this._rows;
     const icon = (r: DetectedRow) =>
       r.level === "warning" ? "mdi:alert-outline" : r.level === "ok" ? "mdi:check-circle-outline" : "mdi:information-outline";
     return html`<ha-form

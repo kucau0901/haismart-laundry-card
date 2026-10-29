@@ -1,6 +1,7 @@
 {
   "name": "haismart-laundry-card",
   "version": "1.0.0",
+  "private": true,
   "description": "Home Assistant Lovelace card for the Haier twin washer + dryer laundry centre, driven by the haismart integration.",
   "type": "module",
   "license": "MIT",
@@ -20,7 +21,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
-    "demo": "vite --config vite.demo.config.ts"
+    "demo": "vite --config vite.demo.config.ts",
+    "size": "node scripts/check-size.mjs"
   },
   "dependencies": {
     "lit": "3.3.3"

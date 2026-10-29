@@ -10,7 +10,7 @@ import {
   gateFor,
 } from "../model/derive";
 import { drumVars, t } from "../localize";
-import type { DrumView } from "../view";
+import { noticeText, type DrumView } from "../view";
 import type { RenderCtx } from "./context";
 import { keyActivate, renderErrorStrip, renderNotices, renderStepper } from "./parts";
 
@@ -47,6 +47,7 @@ const OK_KEY: Record<Command, string> = {
   stop: "ctl.ok_stopped",
 };
 const GATE_TEXT: Partial<Record<GateReason, string>> = {
+  busy: "gate.busy",
   fault: "gate.fault",
   door: "gate.door",
   programme: "gate.programme",
@@ -55,6 +56,23 @@ const GATE_TEXT: Partial<Record<GateReason, string>> = {
 
 export const okText = (ctx: Pick<RenderCtx, "lang">, d: DrumModel["key"], cmd: Command) =>
   t(ctx.lang, OK_KEY[cmd], drumVars(ctx.lang, d));
+
+/** Remote-control line text for a drum whose flag is not "on". */
+export function remoteText(ctx: Pick<RenderCtx, "lang" | "sample">, d: DrumModel): string {
+  const vars = drumVars(ctx.lang, d.key);
+  if (!ctx.sample && d.remoteState === "missing") return t(ctx.lang, "remote.missing", vars);
+  if (!ctx.sample && d.remoteState === "unknown") return t(ctx.lang, "remote.unknown", vars);
+  return d.key === "washer" && d.message === 18 ? t(ctx.lang, "remote.door", vars) : t(ctx.lang, "remote.off", vars);
+}
+
+/** Why a gated control can't be used, in words (announced on a disabled press). */
+export function gateText(ctx: RenderCtx, d: DrumModel, gate: GateReason): string {
+  const vars = drumVars(ctx.lang, d.key);
+  if (gate === "remote") return remoteText(ctx, d);
+  if (gate === "pending") return t(ctx.lang, "ctl.waiting", vars);
+  const key = GATE_TEXT[gate];
+  return key ? t(ctx.lang, key, vars) : "";
+}
 
 /** Controls row visible for this drum (§6.1)? Returns the commands it would show. */
 export function visibleCommands(ctx: RenderCtx, d: DrumModel): { primary?: Command; secondary?: Command } {
@@ -75,14 +93,26 @@ export function gateOf(ctx: RenderCtx, d: DrumModel, cmd: Command): GateReason |
   });
 }
 
+/** Accessible name for a command button; set whenever the visible label can be hidden. */
+function commandName(ctx: RenderCtx, d: DrumModel, cmd: Command): string | undefined {
+  const vars = drumVars(ctx.lang, d.key);
+  if (cmd === "start" && d.programme.value && d.programme.label)
+    return t(ctx.lang, "ctl.start_prog", { programme: d.programme.label });
+  if (cmd === "cancel") return t(ctx.lang, "ctl.cancel_drum", vars);
+  if (cmd === "cancel_scheduled") return t(ctx.lang, "ctl.cancel_scheduled_drum", vars);
+  if (cmd === "stop") return t(ctx.lang, "ctl.stop_drum", vars);
+  return undefined;
+}
+
 function renderButton(
   ctx: RenderCtx,
   d: DrumModel,
   cmd: Command,
   role: "primary" | "secondary",
+  /** Icon-only below 320px tile width: only when a labelled primary sits next to it. */
+  collapsible: boolean,
 ): TemplateResult {
   const { lang } = ctx;
-  const vars = drumVars(lang, d.key);
   const st = ctx.controller.get(d.key);
   const sendingThis = st?.phase === "sending" && st.cmd === cmd;
   const gate = gateOf(ctx, d, cmd);
@@ -95,12 +125,8 @@ function renderButton(
         : gate && GATE_TEXT[gate]
           ? `reason-${d.key}`
           : undefined;
-  const busyTitle = gate === "busy" ? t(lang, "gate.busy", vars) : undefined;
   const label = t(lang, CMD_LABEL[cmd]);
-  let aria: string | undefined;
-  if (cmd === "start" && d.programme.value && d.programme.label)
-    aria = t(lang, "ctl.start_prog", { programme: d.programme.label });
-  else if (cmd === "cancel") aria = t(lang, "ctl.cancel_drum", vars);
+  const name = commandName(ctx, d, cmd);
   const style =
     cmd === "start" || cmd === "resume"
       ? "filled"
@@ -110,18 +136,21 @@ function renderButton(
           ? "warn"
           : "destructive";
   return html`<button
-    class="btn ${style} ${role}"
+    class="btn ${style} ${role} ${collapsible ? "collapsible" : ""}"
     type="button"
     data-role=${role}
     data-drum=${d.key}
     data-cmd=${cmd}
+    data-focus-key="cmd-${d.key}-${cmd}"
     aria-disabled=${disabled ? "true" : "false"}
     aria-busy=${sendingThis ? "true" : "false"}
     aria-describedby=${ifDefined(describedBy)}
-    aria-label=${ifDefined(sendingThis ? undefined : aria)}
-    title=${ifDefined(busyTitle ?? aria)}
+    aria-label=${ifDefined(sendingThis ? undefined : name)}
+    title=${ifDefined(name)}
     @click=${(e: Event) =>
-      disabled ? ctx.on.disabledPress() : ctx.on.command(d, cmd, e.currentTarget as HTMLElement)}
+      disabled
+        ? ctx.on.disabledPress(d, cmd, gate)
+        : ctx.on.command(d, cmd, e.currentTarget as HTMLElement)}
   >
     ${sendingThis
       ? html`<span class="spinner" aria-hidden="true"></span
@@ -137,11 +166,14 @@ export function renderControls(ctx: RenderCtx, d: DrumModel): TemplateResult | t
   const vars = drumVars(lang, d.key);
   const st = ctx.controller.get(d.key);
   const remoteOff = ctx.sample || d.remote !== true;
-  const primaryGate = primary ? gateOf(ctx, d, primary) : null;
-  const reasonKey = primaryGate && GATE_TEXT[primaryGate];
+  // The reason line explains the first gated control (primary first, then the secondary).
+  const gated = [primary, secondary]
+    .filter((c): c is Command => !!c)
+    .map((c) => gateOf(ctx, d, c))
+    .find((g) => g !== null && !!GATE_TEXT[g]);
+  const reasonKey = gated ? GATE_TEXT[gated] : undefined;
   const helpOpen = ctx.ui.remoteHelp.has(d.key);
-  const remoteMsg =
-    d.key === "washer" && d.message === 18 ? t(lang, "remote.door", vars) : t(lang, "remote.off", vars);
+  const unreadable = !ctx.sample && (d.remoteState === "missing" || d.remoteState === "unknown");
 
   let statusLine: TemplateResult | typeof nothing = nothing;
   if (st?.phase === "waiting")
@@ -158,38 +190,45 @@ export function renderControls(ctx: RenderCtx, d: DrumModel): TemplateResult | t
     statusLine = html`<div class="status-line warn" id="status-${d.key}">
       <ha-icon icon="mdi:alert" aria-hidden="true"></ha-icon>
       <span class="grow">${t(lang, "ctl.unconfirmed", vars)}</span>
-      <button class="link-btn" type="button" @click=${() => ctx.on.dismiss(d.key)}>${t(lang, "ctl.dismiss")}</button>
+      <button class="link-btn" type="button" data-focus-key="status-${d.key}" @click=${() => ctx.on.dismiss(d.key)}>
+        ${t(lang, "ctl.dismiss")}
+      </button>
     </div>`;
 
   return html`${renderErrorStrip(ctx, d.key)}
     <div class="controls">
       <div class="btn-row">
-        ${primary ? renderButton(ctx, d, primary, "primary") : nothing}
-        ${secondary ? renderButton(ctx, d, secondary, "secondary") : nothing}
+        ${primary ? renderButton(ctx, d, primary, "primary", false) : nothing}
+        ${secondary ? renderButton(ctx, d, secondary, "secondary", !!primary) : nothing}
       </div>
       ${remoteOff
         ? html`<div class="remote-line">
-              <ha-icon icon="mdi:remote-off" aria-hidden="true"></ha-icon>
-              <span class="full" id="remote-${d.key}">${remoteMsg}</span>
-              <span class="short" aria-hidden="true">${t(lang, "remote.off_short")}</span>
-              <button
-                class="info-btn"
-                type="button"
-                aria-label=${t(lang, "remote.help_label")}
-                title=${t(lang, "remote.help_label")}
-                aria-expanded=${helpOpen ? "true" : "false"}
-                aria-controls="remote-help-${d.key}"
-                @click=${() => ctx.on.toggle("remoteHelp", d.key)}
-              >
-                <ha-icon icon="mdi:information-outline" aria-hidden="true"></ha-icon>
-              </button>
+              <ha-icon icon=${unreadable ? "mdi:help-circle-outline" : "mdi:remote-off"} aria-hidden="true"></ha-icon>
+              <span class="full" id="remote-${d.key}">${remoteText(ctx, d)}</span>
+              ${unreadable
+                ? d.remoteState === "missing" && ctx.isAdmin
+                  ? html`<button class="link-btn" type="button" @click=${() => ctx.on.openDevice()}>
+                      ${t(lang, "remote.open_device")}
+                    </button>`
+                  : nothing
+                : html`<button
+                    class="info-btn"
+                    type="button"
+                    aria-label=${t(lang, "remote.help_label")}
+                    title=${t(lang, "remote.help_label")}
+                    aria-expanded=${helpOpen ? "true" : "false"}
+                    aria-controls="remote-help-${d.key}"
+                    @click=${() => ctx.on.toggle("remoteHelp", d.key)}
+                  >
+                    <ha-icon icon="mdi:information-outline" aria-hidden="true"></ha-icon>
+                  </button>`}
             </div>
-            ${helpOpen
+            ${helpOpen && !unreadable
               ? html`<p class="remote-help" id="remote-help-${d.key}">${t(lang, "remote.help", vars)}</p>`
               : nothing}`
         : reasonKey
           ? html`<div class="reason" id="reason-${d.key}">
-              <ha-icon icon="mdi:information-outline" aria-hidden="true"></ha-icon><span>${t(lang, reasonKey)}</span>
+              <ha-icon icon="mdi:information-outline" aria-hidden="true"></ha-icon><span>${t(lang, reasonKey, vars)}</span>
             </div>`
           : nothing}
       ${statusLine}
@@ -206,26 +245,54 @@ function labelRow(ctx: RenderCtx, d: DrumModel, v: DrumView): TemplateResult {
       .icon=${v.icon}
       aria-hidden="true"
     ></ha-icon>
-    ${v.pulse ? html`<span class="dot pulse" aria-hidden="true"></span>` : nothing}
+    ${v.pulse
+      ? // Keyed on the phase: the pulse runs a few times per phase change, not for hours.
+        keyed(`${d.status}-${d.phase}`, html`<span class="dot pulse" aria-hidden="true"></span>`)
+      : nothing}
     <span class="eyebrow ellipsis"><span id="name-${d.key}">${v.name}</span>${rest}</span>
     <span class="label-icons">
       ${showRemoteOn
-        ? html`<ha-icon icon="mdi:remote" title=${t(ctx.lang, "remote.on")} aria-label=${t(ctx.lang, "remote.on")}></ha-icon>`
+        ? // The state is in the summary's sentence ("remote control on"); the icon is visual only.
+          html`<ha-icon icon="mdi:remote" title=${t(ctx.lang, "remote.on")} aria-hidden="true"></ha-icon>`
         : nothing}
     </span>
   </div>`;
 }
 
-export function renderTile(ctx: RenderCtx, d: DrumModel): TemplateResult {
+/** The expand/collapse toggle of a foldable drum; same focus key in both states. */
+export function renderDrumToggle(ctx: RenderCtx, d: DrumModel, expanded: boolean): TemplateResult {
+  const vars = drumVars(ctx.lang, d.key);
+  const label = t(ctx.lang, expanded ? "a11y.hide_drum" : "a11y.show_drum", vars);
+  return html`<button
+    class="btn icon-only drum-toggle"
+    type="button"
+    data-focus-key="expand-${d.key}"
+    aria-expanded=${expanded ? "true" : "false"}
+    aria-label=${label}
+    title=${label}
+    @click=${() => ctx.on.toggle("expanded", d.key)}
+  >
+    <ha-icon icon=${expanded ? "mdi:chevron-up" : "mdi:chevron-down"} aria-hidden="true"></ha-icon>
+  </button>`;
+}
+
+export function renderTile(ctx: RenderCtx, d: DrumModel, opts: { collapsible?: boolean } = {}): TemplateResult {
   const v = ctx.views[d.key];
   const tinted = v.tint !== null;
   const tintCls = v.tint ? `t-${v.tint}` : "";
-  const showHint = !!v.programmeChip && d.status === "idle";
-  return html`<section class="tile ${tintCls} ${tinted ? "tinted" : ""}" role="group" aria-labelledby="name-${d.key}">
+  const chip = v.programmeChip;
+  const showHint = !!chip && chip.empty && d.status === "idle";
+  return html`<section
+    class="tile ${tintCls} ${tinted ? "tinted" : ""} ${opts.collapsible ? "has-toggle" : ""}"
+    role="group"
+    aria-labelledby="name-${d.key}"
+  >
     <div
       class="summary"
       role="button"
       tabindex="0"
+      data-focus-key="summary-${d.key}"
+      data-summary=${d.key}
       aria-label=${v.aria}
       @click=${() => ctx.on.tap(d)}
       @keydown=${keyActivate(() => ctx.on.tap(d))}
@@ -240,21 +307,28 @@ export function renderTile(ctx: RenderCtx, d: DrumModel): TemplateResult {
       ${v.support
         ? html`<div class="support ${v.supportIcon ? "blocking" : ""}" aria-hidden="true">
             ${v.supportIcon ? html`<ha-icon .icon=${v.supportIcon}></ha-icon>` : nothing}
-            <span class="ellipsis" title=${v.support}>${v.support}</span>
+            <span class="clamp2">${v.support}</span>
           </div>`
         : nothing}
     </div>
-    ${v.programmeChip
+    ${opts.collapsible ? renderDrumToggle(ctx, d, true) : nothing}
+    ${chip
       ? html`<div class="prog-line">
           <button
             class="chip prog-chip"
             type="button"
-            title=${v.programmeChip.label}
-            @click=${() => ctx.on.moreInfo(v.programmeChip!.entity)}
+            data-focus-key="prog-${d.key}"
+            aria-haspopup="dialog"
+            aria-label=${chip.empty
+              ? t(ctx.lang, "prog.chip_label_none")
+              : t(ctx.lang, "prog.chip_label", { programme: chip.label })}
+            aria-describedby=${ifDefined(showHint ? `hint-${d.key}` : undefined)}
+            @click=${() => ctx.on.moreInfo(chip.entity)}
           >
-            <span>${v.programmeChip.label}</span><ha-icon icon="mdi:chevron-down" aria-hidden="true"></ha-icon>
+            <span>${chip.label}</span><ha-icon icon="mdi:pencil-outline" aria-hidden="true"></ha-icon>
           </button>
-          ${showHint ? html`<span class="hint">${t(ctx.lang, "support.pick_hint")}</span>` : nothing}
+          ${chip.meta ? html`<span class="prog-meta" aria-hidden="true">${chip.meta}</span>` : nothing}
+          ${showHint ? html`<span class="hint" id="hint-${d.key}">${t(ctx.lang, "support.pick_hint")}</span>` : nothing}
         </div>`
       : nothing}
     ${ctx.config.show_stepper ? renderStepper(ctx.lang, d.steps) : nothing}
@@ -263,62 +337,60 @@ export function renderTile(ctx: RenderCtx, d: DrumModel): TemplateResult {
   </section>`;
 }
 
-/** Compact layout: one 40px row per drum. */
-export function renderCompactRow(ctx: RenderCtx, d: DrumModel | null, text: string, aria: string, icon: string, attention: string | null): TemplateResult {
+const DRUM_ICON: Record<DrumModel["key"], string> = { washer: "mdi:washing-machine", dryer: "mdi:tumble-dryer" };
+
+/** Small notice marker: shape (not only colour) says "something to look at". */
+const noticeMark = (show: boolean) =>
+  show ? html`<ha-icon class="aicon" icon="mdi:alert-circle-outline" aria-hidden="true"></ha-icon>` : nothing;
+
+/** Compact layout: one 40px row per drum. The drum icon always says which drum it is. */
+export function renderCompactRow(
+  ctx: RenderCtx,
+  d: DrumModel | null,
+  text: string,
+  aria: string,
+  opts: { icon?: string; tint?: string | null; notice?: boolean; onTap?: () => void } = {},
+): TemplateResult {
+  const icon = opts.icon ?? (d ? DRUM_ICON[d.key] : "mdi:washing-machine");
+  const tap = opts.onTap ?? (() => d && ctx.on.tap(d));
   return html`<div
-    class="crow"
+    class="crow ${opts.tint ? `t-${opts.tint}` : ""}"
     role="button"
     tabindex="0"
+    data-focus-key="crow-${d?.key ?? "all"}"
     aria-label=${aria}
-    @click=${() => d && ctx.on.tap(d)}
-    @keydown=${keyActivate(() => d && ctx.on.tap(d))}
+    @click=${tap}
+    @keydown=${keyActivate(tap)}
   >
-    <ha-icon .icon=${icon} class="drum-icon muted" aria-hidden="true"></ha-icon>
+    <ha-icon .icon=${icon} class="drum-icon ${opts.tint ? "" : "muted"}" aria-hidden="true"></ha-icon>
     <span class="chero ellipsis" aria-hidden="true">${text}</span>
-    ${attention ? html`<span class="adot ${attention}" aria-hidden="true"></span>` : nothing}
+    ${noticeMark(!!opts.notice)}
   </div>`;
 }
 
-/** Stacked layout: the idle drum collapsed to a 56px row. */
+/** Stacked layout: the resting drum folded to a 56px row. Start is reached by expanding it. */
 export function renderCollapsedRow(ctx: RenderCtx, d: DrumModel): TemplateResult {
   const v = ctx.views[d.key];
-  const { primary } = visibleCommands(ctx, d);
-  const canStart = primary === "start" && gateOf(ctx, d, "start") === null;
+  const first = ctx.config.show_notices ? d.notices[0] : undefined;
   return html`<div class="collapsed" role="group" aria-labelledby="name-${d.key}">
     <div
       class="summary"
       role="button"
       tabindex="0"
+      data-focus-key="summary-${d.key}"
+      data-summary=${d.key}
       aria-label=${v.aria}
       @click=${() => ctx.on.tap(d)}
       @keydown=${keyActivate(() => ctx.on.tap(d))}
     >
-      <ha-icon class="drum-icon" .icon=${v.icon} aria-hidden="true"></ha-icon>
-      <span class="ellipsis" aria-hidden="true"><span id="name-${d.key}">${v.name}</span> · ${v.short}</span>
-      ${v.attention ? html`<span class="adot ${v.attention}" aria-hidden="true"></span>` : nothing}
+      <ha-icon class="drum-icon" .icon=${DRUM_ICON[d.key]} aria-hidden="true"></ha-icon>
+      <span class="clamp2" aria-hidden="true"
+        ><span id="name-${d.key}">${v.name}</span> · ${v.short}${first
+          ? html` · <span class="cnotice">${noticeText(ctx.lang, first)}</span>`
+          : nothing}</span
+      >
+      ${noticeMark(!!first)}
     </div>
-    ${canStart
-      ? html`<button
-          class="btn tonal icon-only"
-          type="button"
-          data-role="primary"
-          data-drum=${d.key}
-          data-cmd="start"
-          aria-label=${d.programme.label ? t(ctx.lang, "ctl.start_prog", { programme: d.programme.label }) : t(ctx.lang, "ctl.start")}
-          title=${t(ctx.lang, "ctl.start")}
-          @click=${(e: Event) => ctx.on.command(d, "start", e.currentTarget as HTMLElement)}
-        >
-          <ha-icon icon="mdi:play" aria-hidden="true"></ha-icon>
-        </button>`
-      : nothing}
-    <button
-      class="btn icon-only"
-      type="button"
-      aria-expanded="false"
-      aria-label=${t(ctx.lang, "a11y.show_drum", drumVars(ctx.lang, d.key))}
-      @click=${() => ctx.on.toggle("expanded", d.key)}
-    >
-      <ha-icon icon="mdi:chevron-down" aria-hidden="true"></ha-icon>
-    </button>
+    ${renderDrumToggle(ctx, d, false)}
   </div>`;
 }

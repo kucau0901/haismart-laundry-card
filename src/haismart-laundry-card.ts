@@ -7,6 +7,7 @@ import {
   type LaundryModel,
   type ModelMemory,
   type Resolution,
+  allHaismartEntityIds,
   buildIndex,
   buttonFor,
   derive,
@@ -22,11 +23,11 @@ import { timeCtx } from "./time";
 import { type DrumView, drumView, headline, resolvedTimeDisplay, totalsLine, type ViewCtx } from "./view";
 import { cardStyles } from "./styles";
 import type { Handlers, RenderCtx, ResolvedConfig, UiState } from "./ui/context";
-import { renderFaultBanner, renderOffBlock, renderSetupAlert } from "./ui/parts";
-import { okText, renderCollapsedRow, renderCompactRow, renderTile, visibleCommands } from "./ui/tile";
+import { faultLines, renderFaultBanner, renderOffBlock, renderSetupAlert } from "./ui/parts";
+import { gateText, okText, renderCollapsedRow, renderCompactRow, renderTile, visibleCommands } from "./ui/tile";
 import { type DialogState, renderDialogContent } from "./ui/dialog";
 import { buildHass } from "./mock/build-hass";
-import snapshot from "../test/fixtures/snapshot_dryer_running_washer_idle.json";
+import { SAMPLE_VALUES } from "./sample";
 import "./editor";
 
 export const CARD_TYPE = "haismart-laundry-card";
@@ -91,15 +92,22 @@ export function validateConfig(config: LaundryCardConfig): ResolvedConfig {
   return { ...DEFAULTS, ...config } as ResolvedConfig;
 }
 
-/** Width -> layout with 8px hysteresis around the 460/280 breakpoints. */
+/**
+ * Side by side from 600px: below that each tile would be under ~290px and its stepper, remote
+ * line and support text get cramped. Stacked from 280px, compact below.
+ */
+export const FULL_MIN_WIDTH = 600;
+export const STACKED_MIN_WIDTH = 280;
+
+/** Width -> layout with 8px hysteresis around the breakpoints. */
 export function layoutForWidth(width: number, prev?: Layout): Layout {
-  const target: Layout = width >= 460 ? "full" : width >= 280 ? "stacked" : "compact";
+  const target: Layout = width >= FULL_MIN_WIDTH ? "full" : width >= STACKED_MIN_WIDTH ? "stacked" : "compact";
   if (!prev || prev === target) return target;
   const H = 8;
   if ((prev === "full" && target === "stacked") || (prev === "stacked" && target === "full"))
-    return Math.abs(width - 460) < H ? prev : target;
+    return Math.abs(width - FULL_MIN_WIDTH) < H ? prev : target;
   if ((prev === "stacked" && target === "compact") || (prev === "compact" && target === "stacked"))
-    return Math.abs(width - 280) < H ? prev : target;
+    return Math.abs(width - STACKED_MIN_WIDTH) < H ? prev : target;
   return target;
 }
 
@@ -150,8 +158,12 @@ export class HaismartLaundryCard extends LitElement {
   private _now = Date.now();
   private _prevDone: Partial<Record<DrumKey, boolean>> = {};
   private _prevRemote: Partial<Record<DrumKey, boolean>> = {};
-  private _faultAnnounced = false;
-  private _faultFirstRender = false;
+  /** Fault set last seen (undefined before the first model): announcements follow changes. */
+  private _faultSig?: string;
+  /** Text of the persistent role=alert region. */
+  private _alert = "";
+  /** data-focus-key of the element focused before this render (focus recovery). */
+  private _focusKey?: string;
   private _ro?: ResizeObserver;
   private _tickTimer?: ReturnType<typeof setTimeout>;
   private _gateTimer?: ReturnType<typeof setTimeout>;
@@ -164,9 +176,8 @@ export class HaismartLaundryCard extends LitElement {
     },
     onConfirmed: (drum, cmd) => this._say(okText({ lang: this._lang }, drum, cmd)),
     onUnconfirmed: (drum) => this._say(t(this._lang, "ctl.unconfirmed", drumVars(this._lang, drum))),
-    onError: (drum, _cmd, err) => {
-      fire(this, "hass-notification", { message: t(this._lang, err.key, drumVars(this._lang, drum)) });
-    },
+    // Errors: the inline role=alert strip next to the control (with Retry and Details) is the only
+    // channel. No toast: it would repeat the strip and cover the bottom sheet on phones.
   });
 
   // ------------------------------------------------------------------ Lovelace API
@@ -186,15 +197,17 @@ export class HaismartLaundryCard extends LitElement {
 
   getCardSize(): number {
     const layout = this._effLayout();
-    if (layout === "compact") return 2;
+    if (layout === "compact") return 3;
     if (this._model?.machineOff) return this._config?.off_style === "collapse" ? 1 : 5;
     if (layout === "stacked") return this._collapsedNow ? 6 : 9;
     return 6;
   }
 
   getGridOptions() {
+    // Compact is ~145px with its title and ~180px while the machine is off: a fixed 2 rows
+    // (120px) would clip it, so its height follows the content too.
     return this._config?.layout === "compact"
-      ? { columns: 6, rows: 2, min_columns: 3, min_rows: 1 }
+      ? { columns: 6, rows: "auto", min_columns: 3, min_rows: 2 }
       : { columns: 12, rows: "auto", min_columns: 3, min_rows: 2 };
   }
 
@@ -211,6 +224,10 @@ export class HaismartLaundryCard extends LitElement {
       });
       this._ro.observe(this);
     }
+    // Re-attached (view switch, edit mode, app foregrounded): re-arm the command timers from their
+    // deadlines and re-run _scheduleTimers so countdowns tick again.
+    this._controller.resume();
+    if (this._config) this.requestUpdate();
   }
 
   override disconnectedCallback(): void {
@@ -247,13 +264,17 @@ export class HaismartLaundryCard extends LitElement {
       old.language !== h.language
     )
       return true;
-    if (this._sampleActive || !this._tracked.length) return false;
-    return this._tracked.some((eid) => old.states?.[eid] !== h.states?.[eid]);
+    if (this._sampleActive) return false;
+    // Not resolved yet (no device found, not a laundry device): discovery depends on live state
+    // attributes, so watch every haismart entity until it resolves.
+    const ids = this._tracked.length ? this._tracked : allHaismartEntityIds(h);
+    return ids.some((eid) => old.states?.[eid] !== h.states?.[eid]);
   }
 
   protected override willUpdate(): void {
     this._now = Date.now();
     const active = this.shadowRoot?.activeElement as HTMLElement | null | undefined;
+    this._focusKey = active?.dataset?.focusKey;
     this._focusPrimary =
       active?.dataset?.role === "primary" ? { drum: active.dataset.drum ?? "", cmd: active.dataset.cmd ?? "" } : undefined;
 
@@ -262,7 +283,7 @@ export class HaismartLaundryCard extends LitElement {
     this._resolution = resolveDevice(hass, cfg);
     this._sampleActive = false;
     if (this.preview && (this._resolution.kind === "none" || (this._resolution.kind === "loading" && !hass?.entities))) {
-      this._sampleHass ??= buildHass(snapshot as Record<string, unknown>, {
+      this._sampleHass ??= buildHass(SAMPLE_VALUES, {
         controls: true,
         language: hass?.locale?.language,
         timeFormat: hass?.locale?.time_format ?? "language",
@@ -280,6 +301,7 @@ export class HaismartLaundryCard extends LitElement {
     this._index = buildIndex(hass, this._resolution.deviceId);
     this._tracked = trackedEntityIds(this._index, hass);
     this._model = derive(hass, this._index, { now: this._now, memory: this._memory });
+    this._updateFaultAlert(this._model);
     const vc = this._viewCtx();
     this._views = {
       washer: drumView(this._model, this._model.washer, vc),
@@ -300,6 +322,39 @@ export class HaismartLaundryCard extends LitElement {
     };
   }
 
+  /** Fills the persistent alert region when the set of active faults changes (not on first render). */
+  private _updateFaultAlert(m: LaundryModel): void {
+    const f = m.fault;
+    const sig = f.on && !m.machineOff ? JSON.stringify([f.faults, f.codeList]) : "";
+    if (this._faultSig !== undefined && sig !== this._faultSig) {
+      const lang = this._lang;
+      this._alert = sig ? `${t(lang, "fault.title")}: ${faultLines(lang, f).lines.join("; ")}` : "";
+    }
+    this._faultSig = sig;
+  }
+
+  /** Where focus goes when the focused element was removed by a re-render. */
+  private _focusFallback(key: string | undefined, drum?: DrumKey): HTMLElement | null {
+    const root = this.shadowRoot;
+    if (!root) return null;
+    const q = (sel: string) => root.querySelector<HTMLElement>(sel);
+    if (key) {
+      const same = q(`[data-focus-key="${key}"]`);
+      if (same) return same;
+      const m = /^(cmd|strip|status|notices-more|prog|expand|summary|crow)-(washer|dryer)/.exec(key);
+      if (m) drum = m[2] as DrumKey;
+      if (m && (m[1] === "strip" || m[1] === "status")) {
+        const ctl = q(`[data-role="primary"][data-drum="${drum}"]`) ?? q(`[data-role="secondary"][data-drum="${drum}"]`);
+        if (ctl) return ctl;
+      }
+    }
+    if (drum) {
+      const summary = q(`[data-summary="${drum}"]`) ?? q(`[data-focus-key="crow-${drum}"]`);
+      if (summary) return summary;
+    }
+    return q('[data-focus-key="title"]') ?? q('[data-focus-key="off"]');
+  }
+
   protected override updated(): void {
     const m = this._model;
     // Dialog: open/close and the live re-check.
@@ -315,7 +370,10 @@ export class HaismartLaundryCard extends LitElement {
         (dlg.querySelector("[data-safe]") as HTMLElement | null)?.focus();
       }
     }
-    if (this._dialog && (!m || m.machineOff)) this._closeDialog();
+    if (this._dialog && (!m || m.machineOff)) {
+      this._closeDialog(true);
+      this._say(t(this._lang, "a11y.dialog_closed_off"));
+    }
 
     if (!m) return;
     this._controller.observe([m.washer, m.dryer]);
@@ -327,6 +385,12 @@ export class HaismartLaundryCard extends LitElement {
       if (next && next.dataset.cmd !== cmd && this.shadowRoot?.activeElement !== next) next.focus();
       this._focusPrimary = undefined;
     }
+    // Focus recovery: the focused control was removed (expand/collapse swap, error strip
+    // dismissed, Cancel gone once the drum went idle). Send focus to a defined neighbour instead
+    // of letting it fall to <body>.
+    if (this._focusKey && !this._dialog && this.shadowRoot && !this.shadowRoot.activeElement)
+      this._focusFallback(this._focusKey)?.focus();
+    this._focusKey = undefined;
 
     // Polite announcements: done transitions and remote becoming available.
     for (const d of [m.washer, m.dryer]) {
@@ -339,8 +403,6 @@ export class HaismartLaundryCard extends LitElement {
       if (d.remote !== undefined) this._prevRemote[d.key] = d.remote;
       if (d.status === "idle") this._ui.hintSeen.add(d.key);
     }
-    if (m.fault.on && this._faultFirstRender) this._faultAnnounced = true;
-    if (!m.fault.on) this._faultAnnounced = false;
 
     this._scheduleTimers(m);
   }
@@ -396,7 +458,17 @@ export class HaismartLaundryCard extends LitElement {
       fire(this, "hass-more-info", { entityId });
     },
     command: (d, cmd, trigger) => this._activate(d.key, cmd, trigger),
-    disabledPress: () => haptic("light"),
+    disabledPress: (d, _cmd, gate) => {
+      haptic("light");
+      const ctx = this._renderCtx();
+      if (!ctx || !gate) return;
+      // Say why, for keyboard and screen-reader users; open the remote help where it applies.
+      if (gate === "remote" && !ctx.sample && (d.remoteState === "off" || d.remoteState === "on") && !this._ui.remoteHelp.has(d.key)) {
+        this._ui.remoteHelp.add(d.key);
+        this._rev++;
+      }
+      this._say(gateText(ctx, d, gate));
+    },
     dismiss: (drum) => this._controller.dismiss(drum),
     retry: (drum, trigger) => {
       const st = this._controller.get(drum);
@@ -465,8 +537,9 @@ export class HaismartLaundryCard extends LitElement {
     void this._controller.run(hass, drum, cmd, entity);
   }
 
-  private _closeDialog(): void {
+  private _closeDialog(machineOff = false): void {
     const trigger = this._dialog?.trigger;
+    const drum = this._dialog?.drum;
     this._dialog = undefined;
     const dlg = this.shadowRoot?.querySelector("dialog");
     if (dlg?.open) {
@@ -476,7 +549,12 @@ export class HaismartLaundryCard extends LitElement {
         dlg.removeAttribute("open");
       }
     }
-    if (trigger?.isConnected) requestAnimationFrame(() => trigger.focus());
+    // Back to the trigger; if a re-render replaced it (Retry's strip, the machine turning off),
+    // to the drum's summary, or the off block / card title.
+    requestAnimationFrame(() => {
+      if (!machineOff && trigger?.isConnected) trigger.focus();
+      else this._focusFallback(undefined, machineOff ? undefined : drum)?.focus();
+    });
   }
 
   private _confirmDialog(): void {
@@ -512,6 +590,7 @@ export class HaismartLaundryCard extends LitElement {
       ui: this._ui,
       on: this._handlers,
       sample: this._sampleActive,
+      isAdmin: !!this.hass?.user?.is_admin && !this._sampleActive,
     };
   }
 
@@ -524,7 +603,8 @@ export class HaismartLaundryCard extends LitElement {
 
   private _title(): string {
     const c = this._config!;
-    if (typeof c.title === "string") return c.title;
+    // An emptied title field means "use the default", not a blank header.
+    if (typeof c.title === "string" && c.title.trim()) return c.title;
     const hass = this._sampleActive ? this._sampleHass : this.hass;
     if (this._resolution.kind === "ok" && hass)
       return deviceDisplayName(hass, this._resolution.deviceId, t(this._lang, "card.default_title"));
@@ -550,26 +630,23 @@ export class HaismartLaundryCard extends LitElement {
     const m = ctx.model;
     const layout = ctx.layout;
     const drums = this._drumsShown(m);
-    const live = html`<div class="sr-only" aria-live="polite" aria-atomic="true">${this._announce}</div>`;
+    const live = html`<div class="sr-only" aria-live="polite" aria-atomic="true">${this._announce}</div>
+      <div class="sr-only" role="alert" aria-atomic="true">${this._alert}</div>`;
     this._collapsedNow = false;
 
     // C1: machine off, condensed variants.
     if (m.machineOff && (layout !== "full" || this._config.off_style === "collapse")) {
       const variant = this._config.off_style === "collapse" ? "collapse" : layout === "compact" ? "compact" : "stacked";
       return html`<ha-card lang=${lang} class="layout-${layout}">
-        ${live} ${layout === "compact" && this._title() ? html`<div class="compact-title ellipsis">${this._title()}</div>` : nothing}
-        ${renderOffBlock(ctx, variant)}
+        ${live} ${layout === "compact" ? this._renderCompactTitle() : nothing} ${renderOffBlock(ctx, variant)}
       </ha-card>`;
     }
 
     if (layout === "compact") return this._renderCompact(ctx, drums, live);
 
     // Full / stacked.
-    const announceFault = m.fault.on && !this._faultAnnounced;
-    this._faultFirstRender = announceFault;
     const head = headline(m, drums, ctx.viewCtx);
     const title = this._title();
-    const isAdmin = !!this.hass?.user?.is_admin && !this._sampleActive;
 
     let tiles: TemplateResult[];
     if (layout === "stacked" && this._config.collapse_idle && drums.length === 2) {
@@ -582,46 +659,44 @@ export class HaismartLaundryCard extends LitElement {
           this._collapsedNow = true;
           return renderCollapsedRow(ctx, d);
         }
-        if (collapsible)
-          return html`<div>
-            ${renderTile(ctx, d)}
-            <button
-              class="btn icon-only"
-              type="button"
-              aria-expanded="true"
-              aria-label=${t(lang, "a11y.show_drum", drumVars(lang, d.key))}
-              @click=${() => this._handlers.toggle("expanded", d.key)}
-            >
-              <ha-icon icon="mdi:chevron-up" aria-hidden="true"></ha-icon>
-            </button>
-          </div>`;
-        return renderTile(ctx, d);
+        return renderTile(ctx, d, { collapsible });
       });
     } else tiles = drums.map((d) => renderTile(ctx, d));
 
     const totals = this._config.show_totals && !m.machineOff ? totalsLine(m, lang) : null;
 
     return html`<ha-card lang=${lang} class="layout-${layout}">
-      ${live} ${renderFaultBanner(ctx, announceFault)}
+      ${live}
       <div class="header">
-        ${isAdmin
-          ? html`<button class="title" type="button" title=${t(lang, "a11y.open_device")} @click=${this._handlers.openDevice}>
-              <ha-icon icon="mdi:washing-machine" aria-hidden="true"></ha-icon><span class="ellipsis">${title}</span>
-            </button>`
-          : html`<div class="title">
-              <ha-icon icon="mdi:washing-machine" aria-hidden="true"></ha-icon><span class="ellipsis">${title}</span>
-            </div>`}
+        <h2 class="title" tabindex="-1" data-focus-key="title">
+          <ha-icon icon="mdi:washing-machine" aria-hidden="true"></ha-icon><span class="clamp2">${title}</span>
+        </h2>
+        ${ctx.isAdmin
+          ? html`<a
+              class="dev-link"
+              href="/config/devices/device/${m.deviceId}"
+              aria-label=${t(lang, "a11y.open_device_for", { name: title })}
+              title=${t(lang, "a11y.open_device")}
+              @click=${(e: MouseEvent) => {
+                e.preventDefault();
+                this._handlers.openDevice();
+              }}
+              ><ha-icon icon="mdi:chevron-right" aria-hidden="true"></ha-icon
+            ></a>`
+          : nothing}
         ${this._sampleActive ? html`<span class="sample-chip">${t(lang, "card.sample")}</span>` : nothing}
-        <span class="headline ellipsis" title=${head}>${head}</span>
+        <span class="headline clamp2">${head}</span>
         ${m.childLock === true && !m.machineOff
           ? html`<ha-icon
               class="status-icon"
+              role="img"
               icon="mdi:lock-outline"
               title=${t(lang, "a11y.child_lock")}
               aria-label=${t(lang, "a11y.child_lock")}
             ></ha-icon>`
           : nothing}
       </div>
+      ${renderFaultBanner(ctx)}
       <div class="drums ${drums.length === 2 ? "two" : ""}">${tiles}</div>
       ${m.machineOff
         ? html`<div class="off-explain spanning">
@@ -641,18 +716,34 @@ export class HaismartLaundryCard extends LitElement {
     </ha-card>`;
   }
 
-  private _renderCompact(ctx: RenderCtx, drums: DrumModel[], live: TemplateResult): TemplateResult {
+  private _renderCompactTitle(): TemplateResult | typeof nothing {
     const title = this._title();
+    return title
+      ? html`<h2 class="compact-title ellipsis" tabindex="-1" data-focus-key="title">${title}</h2>`
+      : nothing;
+  }
+
+  private _renderCompact(ctx: RenderCtx, drums: DrumModel[], live: TemplateResult): TemplateResult {
     const views = drums.map((d) => ctx.views[d.key]);
-    const same = views.length === 2 && views[0].short === views[1].short && !views[0].attention && !views[1].attention;
+    const notices = (d: DrumModel) => ctx.config.show_notices && d.notices.length > 0;
+    const same =
+      views.length === 2 && views[0].short === views[1].short && !drums.some(notices) && !views.some((v) => v.attention);
     const head = headline(ctx.model, drums, ctx.viewCtx);
+    const f = ctx.model.fault;
     return html`<ha-card lang=${ctx.lang} class="layout-compact">
-      ${live} ${title ? html`<div class="compact-title ellipsis">${title}</div>` : nothing}
+      ${live} ${this._renderCompactTitle()}
+      ${f.on
+        ? renderCompactRow(ctx, null, t(ctx.lang, "head.attention"), t(ctx.lang, "compact.attention"), {
+            icon: "mdi:alert-circle",
+            tint: "fault",
+            onTap: () => this._handlers.moreInfo(f.entity),
+          })
+        : nothing}
       ${same
-        ? renderCompactRow(ctx, drums[0], head, head, "mdi:washing-machine", null)
+        ? renderCompactRow(ctx, null, head, head, { icon: "mdi:washing-machine" })
         : drums.map((d) => {
             const v = ctx.views[d.key];
-            return renderCompactRow(ctx, d, v.short, v.aria, v.icon, v.attention);
+            return renderCompactRow(ctx, d, v.short, v.aria, { tint: v.tint, notice: notices(d) });
           })}
     </ha-card>`;
   }

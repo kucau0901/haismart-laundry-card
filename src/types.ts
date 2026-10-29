@@ -46,6 +46,9 @@ export interface FrontendLocaleData {
 export interface ServiceCallError {
   code?: number | string;
   message?: string;
+  translation_domain?: string;
+  translation_key?: string;
+  translation_placeholders?: Record<string, string>;
 }
 
 export interface HomeAssistant {
@@ -62,6 +65,9 @@ export interface HomeAssistant {
     service: string,
     data?: Record<string, unknown>,
     target?: Record<string, unknown>,
+    /** Frontend default true: HA shows its own raw toast before rethrowing. */
+    notifyOnError?: boolean,
+    returnResponse?: boolean,
   ): Promise<unknown>;
   callWS?<T>(msg: Record<string, unknown>): Promise<T>;
 }

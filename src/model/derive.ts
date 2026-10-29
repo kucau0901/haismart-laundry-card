@@ -80,6 +80,11 @@ export interface DrumModel {
   message?: number;
   messageEntity?: string;
   remote?: boolean;
+  /**
+   * How the remote-control flag reads: "missing" when its entity is not in the index or has no
+   * state (disabled in the registry), "unknown" when it is unavailable/unknown.
+   */
+  remoteState: "on" | "off" | "unknown" | "missing";
   doorOpen?: boolean;
   doorLocked?: boolean;
   power?: boolean;
@@ -98,7 +103,10 @@ export interface FaultInfo {
   on: boolean;
   entity?: string;
   faults: string[];
+  /** All codes, joined ("E21, E30"). */
   codes?: string;
+  /** The same codes as a list; paired with `faults` by position when the lengths match. */
+  codeList: string[];
 }
 
 export interface TotalValue {
@@ -134,6 +142,10 @@ export interface DrumMemory {
   finishRaw?: number;
   status?: DrumStatus;
   seenDry?: boolean;
+  /** Last programme haier_value read while available. */
+  progValue?: number;
+  /** When that value last changed between two available readings (ms). */
+  progChangedAt?: number;
 }
 
 export type ModelMemory = Partial<Record<DrumKey, DrumMemory>>;
@@ -397,15 +409,16 @@ export function derive(hass: HomeAssistant, index: DeviceIndex, opts: DeriveOpti
 
   // --- fault
   const faultEntity = index.fault ? hass.states?.[index.fault] : undefined;
-  const fault: FaultInfo = { on: false, faults: [], entity: index.fault };
+  const fault: FaultInfo = { on: false, faults: [], codeList: [], entity: index.fault };
   if (faultEntity && faultEntity.state === "on") {
     fault.on = true;
     const fa = faultEntity.attributes ?? {};
     fault.faults = Array.isArray(fa.faults) ? fa.faults.map((f) => String(f)) : [];
     const codes = Array.isArray(fa.fault_codes) ? fa.fault_codes.map((c) => String(c)).filter(Boolean) : [];
-    if (codes.length) fault.codes = codes.join(", ");
+    if (codes.length) fault.codeList = codes;
     else if (fa.error_code !== null && fa.error_code !== undefined && fa.error_code !== 0 && fa.error_code !== "0")
-      fault.codes = String(fa.error_code);
+      fault.codeList = [String(fa.error_code)];
+    if (fault.codeList.length) fault.codes = fault.codeList.join(", ");
   }
 
   const supply = {
@@ -421,6 +434,9 @@ export function derive(hass: HomeAssistant, index: DeviceIndex, opts: DeriveOpti
     const power = r.bool(A.power);
     const mode = r.num(A.mode);
     const remote = r.bool(A.remote);
+    const remoteRead = r.read(A.remote);
+    const remoteState: DrumModel["remoteState"] =
+      remote === true ? "on" : remote === false ? "off" : !remoteRead.eid || !remoteRead.entity ? "missing" : "unknown";
     const doorOpen = r.bool(A.door);
     const doorLocked = r.bool(A.doorLock);
     const options = CONTRACT[A.phase]?.options ?? {};
@@ -453,6 +469,13 @@ export function derive(hass: HomeAssistant, index: DeviceIndex, opts: DeriveOpti
     const pr = r.read(A.programme);
     const pValue = typeof pr.value === "number" ? pr.value : undefined;
     const progOptions = CONTRACT[A.programme]?.options ?? {};
+    // "Applying programme" (gate 7) only follows a real change of value. last_changed alone also
+    // moves when the entity comes back from unavailable (machine waking) or HA restarts.
+    if (pValue !== undefined) {
+      if (mem.progValue !== undefined && mem.progValue !== pValue)
+        mem.progChangedAt = ts(pr.entity?.last_changed) ?? now;
+      mem.progValue = pValue;
+    }
     const programme: ProgrammeInfo = {
       value: pValue,
       label:
@@ -463,7 +486,7 @@ export function derive(hass: HomeAssistant, index: DeviceIndex, opts: DeriveOpti
             : (progOptions[String(pValue)] ?? pr.entity?.state),
       entity: pr.eid,
       domain: pr.eid ? domainOf(pr.eid) : undefined,
-      lastChanged: ts(pr.entity?.last_changed),
+      lastChanged: mem.progChangedAt,
     };
 
     // status (§4.2)
@@ -626,6 +649,7 @@ export function derive(hass: HomeAssistant, index: DeviceIndex, opts: DeriveOpti
       message,
       messageEntity: msg.eid,
       remote,
+      remoteState,
       doorOpen,
       doorLocked,
       power,
@@ -763,6 +787,12 @@ export function commandConfirmed(cmd: Command, d: DrumModel): boolean {
       return (d.status === "running" || d.status === "estimating") && d.mode === 1;
     case "pause":
       return d.mode === 2 || d.status === "paused";
+    case "stop":
+      // Unverified where the dryer lands after anti-crease (README, known limits): accept any
+      // known phase other than anti-crease.
+      return d.phase !== undefined && d.status !== "stale" && d.status !== "off" && d.phase !== 7;
+    case "cancel_scheduled":
+      return d.phase !== undefined && d.status !== "stale" && d.status !== "off" && d.status !== "delayed";
     default:
       return d.phase === 0;
   }

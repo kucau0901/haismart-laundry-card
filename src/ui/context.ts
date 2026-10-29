@@ -1,5 +1,5 @@
 import type { DrumKey, Layout, LaundryCardConfig } from "../types";
-import type { Command, DrumModel, LaundryModel } from "../model/derive";
+import type { Command, DrumModel, GateReason, LaundryModel } from "../model/derive";
 import type { CommandController } from "../controls";
 import type { Lang } from "../localize";
 import type { DrumView, ViewCtx } from "../view";
@@ -33,7 +33,8 @@ export interface Handlers {
   tap(d: DrumModel): void;
   moreInfo(entityId: string | undefined): void;
   command(d: DrumModel, cmd: Command, trigger: HTMLElement): void;
-  disabledPress(): void;
+  /** A gated (aria-disabled) control was pressed: say why. */
+  disabledPress(d: DrumModel, cmd: Command, gate: GateReason | null): void;
   dismiss(drum: DrumKey): void;
   retry(drum: DrumKey, trigger: HTMLElement): void;
   toggle(set: keyof Omit<UiState, "faultMore" | "hintSeen">, drum: DrumKey): void;
@@ -54,4 +55,6 @@ export interface RenderCtx {
   on: Handlers;
   /** Card-picker sample: controls are inert. */
   sample: boolean;
+  /** Current user is an admin (device-page links). */
+  isAdmin: boolean;
 }

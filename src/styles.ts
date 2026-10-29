@@ -1,4 +1,7 @@
-import { css } from "lit";
+import { css, unsafeCSS } from "lit";
+import { MIX } from "./tokens";
+
+const pct = (n: number) => unsafeCSS(`${n}%`);
 
 // Visual tokens (§12), layout (§9), motion (§13). Every token is overridable by themes/card-mod.
 export const cardStyles = css`
@@ -16,10 +19,20 @@ export const cardStyles = css`
     --hlc-radius: var(--ha-card-border-radius, 12px);
     --hlc-on-primary: var(--text-primary-color, #fff);
     --hlc-font: var(--ha-font-family-body, Roboto, system-ui, sans-serif);
+    /* Accessible variants (checked in test/contrast.test.ts). White on HA's default primary is
+       2.6:1, so filled buttons darken the fill; "strong" colours mix toward the text colour,
+       which raises contrast against the surface in light and dark themes alike. */
+    --hlc-filled-bg: color-mix(in srgb, var(--hlc-running) ${pct(MIX.filled)}, #000);
+    --hlc-filled-fg: #fff;
+    --hlc-focus-ring: color-mix(in srgb, var(--primary-color, #03a9f4) ${pct(MIX.focus)}, var(--hlc-text));
+    --hlc-fault-text: color-mix(in srgb, var(--hlc-fault) ${pct(MIX.strong)}, var(--hlc-text));
+    --hlc-warn-strong: color-mix(in srgb, var(--hlc-paused) ${pct(MIX.strong)}, var(--hlc-text));
     display: block;
   }
 
   ha-card {
+    /* Block, so it is a size container even where ha-card has no styles of its own. */
+    display: block;
     container-type: inline-size;
     container-name: hlc;
     font-family: var(--hlc-font);
@@ -56,8 +69,17 @@ export const cardStyles = css`
     white-space: nowrap;
   }
   :focus-visible {
-    outline: 2px solid var(--primary-color, #03a9f4);
+    outline: 2px solid var(--hlc-focus-ring);
     outline-offset: 2px;
+  }
+  .clamp2 {
+    min-width: 0;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow-wrap: anywhere;
   }
   :focus:not(:focus-visible) {
     outline: none;
@@ -70,12 +92,20 @@ export const cardStyles = css`
   .t-scheduled { --hlc-state: var(--hlc-scheduled); }
   .t-fault { --hlc-state: var(--hlc-fault); }
   .t-muted { --hlc-state: var(--hlc-muted); }
+  .t-running,
+  .t-paused,
+  .t-done,
+  .t-scheduled,
+  .t-fault,
+  .t-muted {
+    --hlc-state-strong: color-mix(in srgb, var(--hlc-state) ${pct(MIX.strong)}, var(--hlc-text));
+  }
 
   /* ---------------------------------------------------------------- header */
   .header {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 4px 8px;
     min-height: 48px;
     margin: -8px 0 4px;
   }
@@ -85,28 +115,50 @@ export const cardStyles = css`
     gap: 8px;
     font-size: 16px;
     font-weight: 500;
+    line-height: 1.3;
     min-width: 0;
     flex: 0 1 auto;
     color: var(--hlc-text);
-    background: none;
-    border: 0;
+    margin: 0;
     padding: 0;
     font-family: inherit;
     min-height: 44px;
     border-radius: 8px;
   }
-  button.title {
-    cursor: pointer;
-  }
   .title ha-icon {
     color: var(--hlc-muted);
+  }
+  .dev-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    margin-left: -12px;
+    border-radius: 50%;
+    color: var(--hlc-muted);
+    flex: none;
   }
   .headline {
     margin-left: auto;
     font-size: 14px;
+    line-height: 1.35;
     color: var(--hlc-muted);
     text-align: right;
     flex: 1 1 auto;
+  }
+  /* Narrow cards: the headline gets its own row under the title instead of sharing one. */
+  @container hlc (max-width: 519px) {
+    .header {
+      flex-wrap: wrap;
+      padding-bottom: 4px;
+    }
+    .headline {
+      order: 10;
+      flex-basis: 100%;
+      margin-left: 0;
+      text-align: left;
+    }
   }
   .status-icon {
     --mdc-icon-size: 18px;
@@ -140,6 +192,7 @@ export const cardStyles = css`
   .tile {
     container-type: inline-size;
     container-name: tile;
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -151,7 +204,25 @@ export const cardStyles = css`
   }
   .tile.tinted {
     border-color: transparent;
-    background: color-mix(in srgb, var(--hlc-state) 8%, transparent);
+    background: color-mix(in srgb, var(--hlc-state) ${pct(MIX.tint)}, transparent);
+    /* Secondary text on the tint stays at 4.5:1 or better. */
+    --hlc-muted: color-mix(
+      in srgb,
+      var(--secondary-text-color, #727272) ${pct(MIX.mutedOnTint)},
+      var(--primary-text-color, #212121)
+    );
+  }
+  .tile.has-toggle .label-row {
+    padding-right: 40px;
+  }
+  .drum-toggle {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    color: var(--hlc-muted);
+  }
+  .layout-stacked .tile:not(.tinted) .drum-toggle {
+    right: -6px;
   }
   .layout-stacked .tile {
     border: 0;
@@ -164,7 +235,7 @@ export const cardStyles = css`
     padding: 16px;
     margin: 8px 0;
     border-top: 0 !important;
-    background: color-mix(in srgb, var(--hlc-state) 8%, transparent);
+    background: color-mix(in srgb, var(--hlc-state) ${pct(MIX.tint)}, transparent);
   }
 
   .summary {
@@ -234,11 +305,12 @@ export const cardStyles = css`
   }
   .support {
     font-size: 14px;
+    line-height: 1.35;
     font-weight: 400;
     color: var(--hlc-muted);
     display: flex;
     gap: 6px;
-    align-items: center;
+    align-items: flex-start;
     min-width: 0;
   }
   .support.blocking {
@@ -246,7 +318,7 @@ export const cardStyles = css`
   }
   .support.blocking ha-icon {
     --mdc-icon-size: 18px;
-    color: var(--hlc-paused);
+    color: var(--hlc-warn-strong);
   }
 
   /* ---------------------------------------------------------------- stepper */
@@ -285,32 +357,63 @@ export const cardStyles = css`
     border-radius: 50%;
     flex: none;
     box-sizing: content-box;
-    border: 2px solid var(--hlc-divider);
+    /* Upcoming: a ring of at least 3:1, not the faint divider colour. */
+    border: 2px solid var(--hlc-muted);
     margin: -2px;
   }
   .step .ln {
     flex: 1;
     height: 2px;
     margin: 0 6px;
-    background: var(--hlc-divider);
+    background: var(--hlc-muted);
+    opacity: 0.5;
   }
   .step.complete .pt {
-    background: var(--hlc-state);
-    border-color: var(--hlc-state);
+    background: var(--hlc-state-strong, var(--hlc-state));
+    border-color: var(--hlc-state-strong, var(--hlc-state));
   }
   .step.complete .ln {
-    background: var(--hlc-state);
+    background: var(--hlc-state-strong, var(--hlc-state));
+    opacity: 1;
   }
   .step.current .pt {
-    border-color: var(--hlc-state);
+    border-color: var(--hlc-state-strong, var(--hlc-state));
     background: color-mix(in srgb, var(--hlc-state) 30%, transparent);
+  }
+  .step .lbl {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .step.current .lbl {
     color: var(--hlc-text);
   }
-  @container tile (max-width: 299px) {
-    .step .lbl {
-      display: none;
+  /* Labels are never hidden: on very narrow tiles the connectors shrink instead. */
+  @container tile (max-width: 219px) {
+    .step .ln {
+      margin: 0 3px;
+    }
+  }
+  @media (forced-colors: active) {
+    .step .pt {
+      border-color: CanvasText;
+      background: Canvas;
+    }
+    .step.complete .pt,
+    .step.current .pt {
+      border-color: Highlight;
+    }
+    .step.complete .pt {
+      background: Highlight;
+    }
+    .step .ln,
+    .step.complete .ln {
+      background: CanvasText;
+      opacity: 1;
+    }
+    .dot {
+      background: CanvasText;
     }
   }
 
@@ -361,16 +464,22 @@ export const cardStyles = css`
   .prog-chip ha-icon {
     color: var(--hlc-muted);
   }
+  .prog-meta {
+    font-size: 14px;
+    color: var(--hlc-muted);
+  }
   .hint {
+    flex-basis: 100%;
     font-size: 12px;
     color: var(--hlc-muted);
     margin-top: -6px;
   }
+  /* Chip, then its duration on the same line; the hint (no programme yet) below. */
   .prog-line {
     display: flex;
-    flex-direction: column;
-    gap: 8px;
-    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 0 12px;
+    align-items: center;
     margin: -8px 0;
   }
 
@@ -409,23 +518,26 @@ export const cardStyles = css`
     --mdc-icon-size: 18px;
   }
   .btn.filled {
-    background: var(--hlc-running);
-    color: var(--hlc-on-primary);
+    background: var(--hlc-filled-bg);
+    color: var(--hlc-filled-fg);
   }
   .btn.tonal {
     background: color-mix(in srgb, var(--hlc-running) 12%, transparent);
     color: var(--hlc-text);
   }
   .btn.destructive {
-    color: var(--hlc-fault);
+    color: var(--hlc-fault-text);
     font-weight: 600;
+  }
+  .btn.destructive ha-icon {
+    color: var(--hlc-fault);
   }
   .btn.warn {
     color: var(--hlc-text);
     font-weight: 600;
   }
   .btn.warn ha-icon {
-    color: var(--hlc-paused);
+    color: var(--hlc-warn-strong);
   }
   .btn.icon-only {
     padding: 0;
@@ -436,11 +548,13 @@ export const cardStyles = css`
     opacity: 0.38;
     cursor: default;
   }
+  /* Only a secondary next to a labelled primary goes icon-only (it keeps its aria-label). A
+     drum's only action always shows its label. */
   @container tile (max-width: 319px) {
-    .btn.secondary .lbl {
+    .btn.secondary.collapsible .lbl {
       display: none;
     }
-    .btn.secondary {
+    .btn.secondary.collapsible {
       padding: 0;
       width: 44px;
       border-radius: 50%;
@@ -453,9 +567,16 @@ export const cardStyles = css`
     align-items: center;
     gap: 6px;
     font-size: 12px;
+    line-height: 1.4;
     font-weight: 500;
     color: var(--hlc-muted);
     min-width: 0;
+  }
+  /* These explain disabled controls: full text colour, and the remote line wraps rather than
+     shortening. */
+  .reason,
+  .remote-line {
+    color: var(--hlc-text);
   }
   .reason ha-icon,
   .status-line ha-icon,
@@ -464,18 +585,7 @@ export const cardStyles = css`
   }
   .remote-line .full {
     flex: 1 1 auto;
-  }
-  .remote-line .short {
-    display: none;
-  }
-  @container tile (max-width: 279px) {
-    .remote-line .full {
-      display: none;
-    }
-    .remote-line .short {
-      display: inline;
-      flex: 1 1 auto;
-    }
+    min-width: 0;
   }
   .info-btn {
     min-width: 44px;
@@ -505,7 +615,7 @@ export const cardStyles = css`
     align-items: flex-start;
   }
   .status-line.warn ha-icon {
-    color: var(--hlc-paused);
+    color: var(--hlc-warn-strong);
   }
   .status-line .grow {
     flex: 1;
@@ -569,7 +679,8 @@ export const cardStyles = css`
   .alert .title-line {
     font-weight: 500;
   }
-  .strip .actions {
+  .strip .actions,
+  .banner .actions {
     display: flex;
     gap: 4px;
     flex-wrap: wrap;
@@ -585,31 +696,13 @@ export const cardStyles = css`
     font-size: 12px;
     color: var(--hlc-muted);
   }
-  .banner-wrap {
-    display: flex;
-    gap: 4px;
-    align-items: stretch;
-    margin-bottom: 12px;
-  }
   .banner {
-    flex: 1;
-    cursor: pointer;
+    margin-bottom: 12px;
     min-width: 0;
   }
   .banner ul {
     margin: 4px 0 0;
     padding-left: 18px;
-  }
-  .disclose {
-    border: 0;
-    background: color-mix(in srgb, var(--hlc-fault) 14%, transparent);
-    color: var(--hlc-text);
-    border-radius: 8px;
-    min-width: 44px;
-    min-height: 44px;
-    font: 500 12px var(--hlc-font);
-    cursor: pointer;
-    padding: 0 10px;
   }
   .alert {
     --hlc-state: var(--hlc-paused);
@@ -698,17 +791,16 @@ export const cardStyles = css`
     font-variant-numeric: tabular-nums;
     flex: 1;
   }
-  .adot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    flex: none;
+  /* Notice marker: an icon shape, not a colour-only dot. */
+  .aicon {
+    --mdc-icon-size: 16px;
+    color: var(--hlc-warn-strong);
   }
-  .adot.error {
-    background: var(--hlc-fault);
+  .crow .drum-icon {
+    color: var(--hlc-state-strong, var(--hlc-muted));
   }
-  .adot.warning {
-    background: var(--hlc-paused);
+  .crow .drum-icon.muted {
+    color: var(--hlc-muted);
   }
   .collapsed {
     display: flex;
@@ -727,6 +819,13 @@ export const cardStyles = css`
     min-height: 44px;
   }
   .collapsed .summary .drum-icon {
+    color: var(--hlc-muted);
+  }
+  .collapsed .cnotice {
+    font-weight: 400;
+    color: var(--hlc-muted);
+  }
+  .collapsed .drum-toggle {
     color: var(--hlc-muted);
   }
 
@@ -782,15 +881,19 @@ export const cardStyles = css`
     color: var(--hlc-text);
     margin-bottom: 12px;
   }
+  dialog .changed.empty {
+    margin: 0;
+  }
   dialog .changed ha-icon {
     --mdc-icon-size: 18px;
-    color: var(--hlc-paused);
+    color: var(--hlc-warn-strong);
   }
+  /* DOM order is visual order (safe, then confirm), so Tab moves left to right. */
   dialog .dlg-actions {
     display: flex;
-    flex-direction: row-reverse;
+    flex-direction: row;
     gap: 8px;
-    justify-content: flex-start;
+    justify-content: flex-end;
     margin-top: 8px;
   }
   @media (max-width: 599px) {
@@ -811,6 +914,15 @@ export const cardStyles = css`
 
   /* ---------------------------------------------------------------- fallbacks */
   @supports not (background: color-mix(in srgb, red 10%, transparent)) {
+    :host {
+      --hlc-filled-bg: #0277bd;
+      --hlc-focus-ring: var(--primary-text-color, #212121);
+      --hlc-fault-text: var(--primary-text-color, #212121);
+      --hlc-warn-strong: var(--primary-text-color, #212121);
+    }
+    .tile.tinted {
+      --hlc-muted: var(--primary-text-color, #212121);
+    }
     .tile.tinted,
     .layout-stacked .tile.tinted,
     .chip,
@@ -818,7 +930,6 @@ export const cardStyles = css`
     .banner,
     .alert,
     .btn.tonal,
-    .disclose,
     .sample-chip {
       background: transparent;
       border: 1px solid var(--hlc-state, var(--hlc-running));
@@ -829,13 +940,15 @@ export const cardStyles = css`
   }
 
   /* ---------------------------------------------------------------- motion (§13) */
+  /* Pulses run three times when a phase starts (the element is re-keyed per phase), then stay
+     still: the static dot and the text already say "running" (WCAG 2.2.2). */
   @media (prefers-reduced-motion: no-preference) {
     .pulse {
-      animation: hlc-pulse 2.4s ease-in-out infinite;
+      animation: hlc-pulse 2.4s ease-in-out 3;
     }
     .tilde {
       display: inline-block;
-      animation: hlc-pulse 2.4s ease-in-out infinite;
+      animation: hlc-pulse 2.4s ease-in-out 3;
     }
     .hero {
       animation: hlc-fade 180ms ease-out;

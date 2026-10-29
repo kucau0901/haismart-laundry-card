@@ -50,23 +50,35 @@
         font-size: 16px;
         font-weight: 500;
       }
-      .grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr));
-        gap: 16px;
+      .scenario {
+        margin-bottom: 24px;
       }
-      .cell h3 {
+      .scenario h3 {
         font-size: 14px;
         font-weight: 500;
         margin: 0 0 2px;
+        font-family: ui-monospace, monospace;
       }
-      .cell p {
+      .scenario p {
         font-size: 12px;
         margin: 0 0 8px;
         opacity: 0.75;
       }
-      .narrow {
-        max-width: 380px;
+      .widths {
+        display: flex;
+        gap: 16px;
+        align-items: flex-start;
+        overflow-x: auto;
+        padding-bottom: 4px;
+      }
+      .cell {
+        flex: none;
+        max-width: 100%;
+      }
+      .cap {
+        font-size: 11px;
+        opacity: 0.6;
+        margin-bottom: 4px;
       }
       /* Home Assistant default theme variables (light / dark). */
       .light {
@@ -127,11 +139,33 @@
   </head>
   <body>
     <h1>Haier Laundry Centre card</h1>
-    <p class="lead">Mocked scenarios rendered side by side in Home Assistant's default light and dark themes. No network calls.</p>
+    <p class="lead">Every fixture scenario at phone, 600 px and compact widths, in Home Assistant's default themes. Mocked; no network calls.</p>
     <div class="toolbar">
       <label><input type="checkbox" id="ms" /> Bahasa Melayu</label>
       <label><input type="checkbox" id="h24" /> 24-hour clock</label>
-      <label><input type="checkbox" id="narrow" /> Phone width (380 px)</label>
+      <label
+        >Layout
+        <select id="layout">
+          <option value="auto">auto</option>
+          <option value="full">full</option>
+          <option value="stacked">stacked</option>
+          <option value="compact">compact</option>
+        </select></label
+      >
+      <label
+        >Theme
+        <select id="theme">
+          <option value="light">light</option>
+          <option value="dark">dark</option>
+          <option value="both">both</option>
+        </select></label
+      >
+      <label
+        >Scenario
+        <select id="only">
+          <option value="">all</option>
+        </select></label
+      >
     </div>
     <div class="themes" id="themes"></div>
     <div id="log"></div>

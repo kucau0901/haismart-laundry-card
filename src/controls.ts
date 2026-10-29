@@ -16,6 +16,11 @@ export interface PendingState {
   error?: HumanError;
   /** Status of the drum when the error was shown; the strip clears when it changes. */
   statusAtError?: string;
+  /**
+   * Absolute time (ms) the current phase ends on its own: "waiting" turns "unconfirmed",
+   * "confirmed" clears. Kept so timers can be re-armed after the card is re-attached.
+   */
+  deadline?: number;
 }
 
 export interface ControllerHost {
@@ -63,7 +68,8 @@ export class CommandController {
     this.sendingDrum = drum;
     this.host.requestUpdate();
     try {
-      await hass.callService("button", "press", { entity_id: entity });
+      // notifyOnError=false: the card's own inline strip is the only error UI (no raw HA toast).
+      await hass.callService("button", "press", { entity_id: entity }, undefined, false);
     } catch (err) {
       const human = humaniseError(err);
       this.sendingDrum = undefined;
@@ -76,16 +82,40 @@ export class CommandController {
     const st = this.states.get(drum);
     if (st && st.phase === "sending") {
       st.phase = "waiting";
-      this.setTimer(drum, CONFIRM_TIMEOUT_MS, () => {
+      st.deadline = Date.now() + CONFIRM_TIMEOUT_MS;
+      this.armTimer(st);
+    }
+    this.host.requestUpdate();
+  }
+
+  /** Arms the timer that ends a "waiting" or "confirmed" phase at its deadline. */
+  private armTimer(st: PendingState): void {
+    if (st.deadline === undefined) return;
+    const { drum } = st;
+    const ms = Math.max(0, st.deadline - Date.now());
+    if (st.phase === "waiting")
+      this.setTimer(drum, ms, () => {
         const cur = this.states.get(drum);
         if (cur && cur.phase === "waiting") {
           cur.phase = "unconfirmed";
-          this.host.onUnconfirmed?.(drum, cmd);
+          cur.deadline = undefined;
+          this.host.onUnconfirmed?.(drum, cur.cmd);
           this.host.requestUpdate();
         }
       });
-    }
-    this.host.requestUpdate();
+    else if (st.phase === "confirmed")
+      this.setTimer(drum, ms, () => {
+        if (this.states.get(drum)?.phase === "confirmed") this.states.delete(drum);
+        this.host.requestUpdate();
+      });
+  }
+
+  /**
+   * Re-arms the timers dispose() cleared, from each state's deadline (the card was detached and
+   * re-attached: view switch, edit mode, app backgrounded). A deadline already past fires at once.
+   */
+  resume(): void {
+    for (const st of this.states.values()) if (!this.timers.has(st.drum)) this.armTimer(st);
   }
 
   /** Feed every fresh model in: confirms waiting commands and clears stale error strips. */
@@ -95,11 +125,9 @@ export class CommandController {
       if (!st) continue;
       if (st.phase === "waiting" && commandConfirmed(st.cmd, d)) {
         st.phase = "confirmed";
+        st.deadline = Date.now() + CONFIRMED_DISPLAY_MS;
         this.host.onConfirmed?.(d.key, st.cmd);
-        this.setTimer(d.key, CONFIRMED_DISPLAY_MS, () => {
-          if (this.states.get(d.key)?.phase === "confirmed") this.states.delete(d.key);
-          this.host.requestUpdate();
-        });
+        this.armTimer(st);
         this.host.requestUpdate();
       } else if (st.phase === "error") {
         if (st.statusAtError === undefined) st.statusAtError = d.status;
@@ -120,6 +148,7 @@ export class CommandController {
     }
   }
 
+  /** Clears live timers; states and their deadlines are kept for resume(). */
   dispose(): void {
     for (const k of [...this.timers.keys()]) this.clearTimer(k);
   }

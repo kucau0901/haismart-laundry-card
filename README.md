@@ -27,7 +27,7 @@ every scenario locally.
 
 | | |
 |---|---|
-| Home Assistant | 2025.1 or newer (tested against 2026.10) |
+| Home Assistant | 2025.1 or newer; **targets 2026.10**. So far verified with unit tests, happy-dom render tests and a mocked demo only, not yet in a live Home Assistant frontend (see [Live smoke test](#live-smoke-test)). |
 | haismart integration | **v0.73.2.2 or newer** of the fork used here. That version publishes the `haier_value` attribute (the raw value behind every label) and the `translation_key`s of the laundry buttons (`washer_start`, `washer_pause`, `washer_cancel`, `dryer_start`, `dryer_pause`, `dryer_cancel`) and of the `fault` sensor. Older versions still work in a "labels only" mode, which the card editor points out. |
 | Controls (optional) | Turn them on in **Settings › Devices & services › haismart › Configure › Enable washer and dryer controls**. Without them the card is a status display. |
 
@@ -89,9 +89,9 @@ All keys are optional. Unknown keys are kept and logged once in the browser cons
 
 | Layout | Width | What you get |
 |---|---|---|
-| full | 460 px and wider | Washer and dryer side by side |
-| stacked | 280–459 px | One above the other; the idle drum folds to a single row while the other runs |
-| compact | under 280 px | One 40 px row per drum: icon, finish time, attention dot |
+| full | 600 px and wider | Washer and dryer side by side |
+| stacked | 280–599 px | One above the other; the idle drum folds to a single row (with its first notice) while the other runs; expand it to reach Start |
+| compact | under 280 px | One 40 px row per drum: drum icon, finish time, notice marker; a "Needs attention" row on a fault |
 
 `layout: auto` picks one from the card's own width. In a sections dashboard the card takes the full
 width by default.
@@ -107,28 +107,50 @@ that, recognises the entity ids the integration generates.
 ## Safety notes
 
 - **Remote control must be on at the machine.** For safety the Haier only accepts commands after
-  you press the remote / Wi-Fi key on that drum's panel. Until then every button is disabled with an
-  explanation, and nothing is sent. Opening the washer door turns remote control off again.
+  remote control is turned on at that drum's panel (the machine's manual shows which key; this
+  card does not guess). Until then every button is disabled with an explanation, and nothing is
+  sent. Opening the washer door turns remote control off again. If the card cannot read the
+  remote-control flag at all (entity disabled or unavailable) it says so instead of claiming
+  remote control is off.
 - **Cancel is destructive** (the programme can't be resumed) and always asks for confirmation.
   "Stop tumbling" during anti-crease also asks.
 - **Nothing changes optimistically.** After a button press the card shows "Waiting for the washer to
   confirm…" and only reports success when the machine's own status changes. If nothing changes in
   45 seconds it says so and asks you to check the machine. It never retries by itself.
-- **Errors are shown in the card**, in plain words, with the integration's exact message under
-  "Details".
+- **Errors are shown in the card**, in plain words, next to the control, with the integration's
+  exact message under "Details" and a "Try again" button. Home Assistant's own raw error toast is
+  suppressed so the refusal is reported once.
 - Start is disabled while the machine reports a fault, while the door is open, when no programme is
-  selected, and for 5 seconds after the programme changes.
+  selected, and for 5 seconds after the programme value changes (not merely when the machine
+  reconnects).
 
 ### Known limits
 
 These come from the integration and the machine and are worth checking on your own unit:
 
 1. No laundry command has yet been seen accepted end to end; the 45 s confirmation window is a guess.
+   Where the dryer lands after "Stop tumbling" or after cancelling a delayed start is not known
+   either, so those count as confirmed once the drum reports any known phase other than
+   anti-crease / delayed start (Cancel during a cycle still waits for standby).
 2. Whether a delayed start's remaining time includes the delay is unverified, so those times say "about".
 3. The washer's "Tumbling" (16) and the Care phases are mapped from their labels only.
 4. "Finished at" and "Off since" can show the time Home Assistant restarted.
 5. The unit of `washerTotalElectricityUsed` is not documented; the card shows the entity's own unit or none.
 6. Native `<dialog>`, `color-mix()` and container units need testing in the Companion apps; fallbacks are in place.
+
+### Live smoke test
+
+Before calling a release verified against a real Home Assistant (2026.10 / 2026.11), check:
+
+1. The card picker preview (the sample, controls inert) and adding the card.
+2. The visual editor: the device selector lists the laundry centre, the helper names it, and a
+   change round-trips through `config-changed` without dropping unknown keys.
+3. Tapping a drum opens more-info; the programme chip opens the programme select.
+4. A button press with remote control **off** at the panel: the card refuses before sending.
+5. With remote on, a refused press: the inline error strip appears once (no extra toast).
+6. The machine-off state after a cycle, and the card recovering when the machine comes back.
+7. Resizing in a sections dashboard (full, stacked and compact), light and dark themes, and the
+   cancel dialog in the Companion app (native `<dialog>`).
 
 ## Translations
 

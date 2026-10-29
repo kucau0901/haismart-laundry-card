@@ -7,6 +7,13 @@ import { fmtClock, fmtDuration, fmtDurationLong, fmtPastClock, minutesUntil, typ
 
 export type Tint = "running" | "paused" | "done" | "scheduled" | null;
 
+/** One clause of the support line, with the words a screen reader hears for it. */
+export interface SupportPart {
+  text: string;
+  /** Spoken form (long units, "finishes around"); defaults to `text`. */
+  spoken?: string;
+}
+
 export interface DrumView {
   key: DrumKey;
   name: string;
@@ -18,18 +25,21 @@ export interface DrumView {
   eyebrow: string;
   hero: string;
   heroMuted: boolean;
-  /** Render a breathing "~" before the hero. */
+  /** Render a "~" before the hero. */
   heroApprox: boolean;
+  /** Support line: `supportParts` joined with " · ", most important clause first. */
   support?: string;
+  supportParts: SupportPart[];
   /** Icon before the support line (blocking notice while done). */
   supportIcon?: string;
-  /** Programme name for the interactive chip (idle, select, remote on). */
-  programmeChip?: { label: string; entity: string };
-  /** Short text for compact rows and collapsed rows ("~5:07 pm", "Ready"). */
+  /** Programme name for the interactive chip (idle, select, remote on), and its duration. */
+  programmeChip?: { label: string; entity: string; meta?: string; empty: boolean };
+  /** Short text for compact rows and collapsed rows ("~5:07 pm", "Idle"). */
   short: string;
-  /** Full sentence for the summary's aria-label. */
+  /** Full sentence for the summary's aria-label. Contains every support part's spoken form. */
   aria: string;
-  attention: "error" | "warning" | null;
+  /** Per-drum attention: notices or paused. Faults are machine-wide (banner), never per drum. */
+  attention: "warning" | null;
 }
 
 export interface ViewCtx {
@@ -65,9 +75,13 @@ export function drumView(m: LaundryModel, d: DrumModel, ctx: ViewCtx): DrumView 
     t(lang, key, { ...drumVars(lang, d.key), ...extra });
   const name = t(lang, `drum.${d.key}`);
   const dur = (min: number) => fmtDuration(min, lang);
+  const long = (min: number) => fmtDurationLong(min, lang);
   const clock = (ms: number) => fmtClock(ms, now, ctx.time);
   const countdown = d.finishRaw !== undefined ? minutesUntil(d.finishRaw, now) : d.remaining;
+  /** Spoken status (hero, eyebrow); support parts are appended after these. */
   const ariaParts: string[] = [];
+  const parts: SupportPart[] = [];
+  const sup = (text: string, spoken?: string) => parts.push({ text, spoken });
   const v: DrumView = {
     key: d.key,
     name,
@@ -80,6 +94,7 @@ export function drumView(m: LaundryModel, d: DrumModel, ctx: ViewCtx): DrumView 
     hero: "",
     heroMuted: false,
     heroApprox: false,
+    supportParts: parts,
     short: "",
     aria: "",
     attention: null,
@@ -96,7 +111,7 @@ export function drumView(m: LaundryModel, d: DrumModel, ctx: ViewCtx): DrumView 
       v.icon = "mdi:timer-sand-empty";
       v.hero = t(lang, "status.waiting");
       v.heroMuted = true;
-      v.support = tr("status.stale_support");
+      sup(tr("status.stale_support"));
       ariaParts.push(t(lang, "a11y.waiting"));
       break;
     case "idle": {
@@ -109,36 +124,37 @@ export function drumView(m: LaundryModel, d: DrumModel, ctx: ViewCtx): DrumView 
         d.remote === true &&
         !!d.programme.entity &&
         !m.machineOff;
-      const about = d.idleDuration ? dur(d.idleDuration) : undefined;
-      if (d.generic) v.support = prog;
-      else if (chip) {
-        v.programmeChip = { label: prog, entity: d.programme.entity! };
-        v.support = about ? tr("support.about", { d: about }) : undefined;
-      } else v.support = about && d.programme.value ? tr("support.idle", { programme: prog, d: about }) : prog;
+      const about = d.idleDuration && d.programme.value ? tr("support.about", { d: dur(d.idleDuration) }) : undefined;
+      const aboutSpoken = d.idleDuration ? t(lang, "a11y.takes_about", { d: long(d.idleDuration) }) : undefined;
       ariaParts.push(t(lang, "a11y.ready"));
-      if (d.programme.value) ariaParts.push(t(lang, "a11y.programme", { programme: prog }));
+      if (d.generic) sup(prog);
+      else if (chip) {
+        // The duration sits next to the chip it belongs to, outside the summary.
+        v.programmeChip = { label: prog, entity: d.programme.entity!, meta: about, empty: !d.programme.value };
+        if (d.programme.value) ariaParts.push(t(lang, "a11y.programme", { programme: prog }));
+        if (about && aboutSpoken) ariaParts.push(aboutSpoken);
+      } else if (d.programme.value) {
+        sup(prog, t(lang, "a11y.programme", { programme: prog }));
+        if (about) sup(about, aboutSpoken);
+      } else sup(prog);
       break;
     }
     case "delayed": {
+      // Same pattern for both drums: the word "Scheduled" as the hero, labelled times below.
       v.tint = "scheduled";
       v.icon = "mdi:clock-start";
       v.iconMuted = false;
-      v.eyebrow = tr("eyebrow.scheduled");
+      v.hero = t(lang, "status.scheduled");
       ariaParts.push(t(lang, "a11y.scheduled"));
       if (d.key === "dryer" && d.finishAt !== undefined && d.startsAt !== undefined) {
-        v.hero = clock(d.finishAt);
-        v.heroApprox = true;
-        v.support = tr("support.starts_in", { d: dur(minutesUntil(d.startsAt, now)) });
-        ariaParts.push(
-          t(lang, "a11y.starts_in", { d: fmtDurationLong(minutesUntil(d.startsAt, now), lang) }),
+        const startIn = minutesUntil(d.startsAt, now);
+        sup(tr("support.starts_at", { time: clock(d.startsAt) }), t(lang, "a11y.starts_in", { d: long(startIn) }));
+        sup(
+          tr("support.done_around", { time: "~" + clock(d.finishAt) }),
           t(lang, "a11y.finishes_around", { time: clock(d.finishAt) }),
         );
-      } else {
-        v.hero = t(lang, "status.scheduled");
-        if (d.remaining) {
-          v.support = tr("support.finishes_about", { d: dur(d.remaining) });
-          ariaParts.push(t(lang, "a11y.in_about", { d: fmtDurationLong(d.remaining, lang) }));
-        }
+      } else if (d.remaining) {
+        sup(tr("support.finishes_about", { d: dur(d.remaining) }), t(lang, "a11y.finishes_in_about", { d: long(d.remaining) }));
       }
       break;
     }
@@ -156,8 +172,8 @@ export function drumView(m: LaundryModel, d: DrumModel, ctx: ViewCtx): DrumView 
         ariaParts.push(t(lang, "a11y.finishes_around", { time: clock(d.finishAt) }));
       } else v.hero = t(lang, "status.running");
       if (countdown !== undefined) {
-        v.support = tr(d.key === "dryer" ? "support.est_dryer" : "support.est_washer", { d: dur(countdown) });
-        ariaParts.push(t(lang, "a11y.in_about", { d: fmtDurationLong(countdown, lang) }));
+        sup(tr("support.about", { d: dur(countdown) }), t(lang, "a11y.in_about", { d: long(countdown) }));
+        sup(tr(d.key === "dryer" ? "support.est_dryer" : "support.est_washer"));
       }
       break;
     }
@@ -176,26 +192,24 @@ export function drumView(m: LaundryModel, d: DrumModel, ctx: ViewCtx): DrumView 
       ariaParts.push(t(lang, "a11y.running"), phase.toLocaleLowerCase());
       const finishing = d.remaining === 0 || (d.finishAt !== undefined && countdown === 0);
       const hasClock = d.finishAt !== undefined;
+      const inD = countdown !== undefined ? tr("support.in", { d: dur(countdown) }) : undefined;
+      const inSpoken = countdown !== undefined ? t(lang, "a11y.in_about", { d: long(countdown) }) : undefined;
+      if (d.sub === "maintenance") sup(tr("support.maintenance_short"));
+      else if (d.sub === "care") sup(tr("support.care_short"));
       if (finishing) {
         v.hero = t(lang, "status.finishing");
       } else if (!hasClock) {
         v.hero = t(lang, "status.running");
       } else if (ctx.timeDisplay === "remaining" && !d.sub) {
         v.hero = dur(countdown ?? 0);
-        v.support = tr("support.done_at", { time: clock(d.finishAt!) });
+        if (inSpoken) ariaParts.push(inSpoken);
+        sup(tr("support.done_at", { time: clock(d.finishAt!) }), t(lang, "a11y.finishes_around", { time: clock(d.finishAt!) }));
       } else {
         v.hero = clock(d.finishAt!);
         v.heroApprox = d.approximate;
-        const inD = countdown !== undefined ? dur(countdown) : undefined;
-        if (d.sub === "maintenance")
-          v.support = inD ? tr("support.maintenance", { d: inD }) : tr("support.maintenance_short");
-        else if (d.sub === "care") v.support = inD ? tr("support.care", { d: inD }) : tr("support.care_short");
-        else if (ctx.timeDisplay !== "finish" && inD) v.support = tr("support.in", { d: inD });
-      }
-      if (hasClock && !finishing) {
         ariaParts.push(t(lang, "a11y.finishes_around", { time: clock(d.finishAt!) }));
-        if (countdown !== undefined)
-          ariaParts.push(t(lang, "a11y.in_about", { d: fmtDurationLong(countdown, lang) }));
+        if ((d.sub || ctx.timeDisplay !== "finish") && inD) sup(inD, inSpoken);
+        else if (inSpoken) ariaParts.push(inSpoken);
       }
       break;
     }
@@ -203,12 +217,12 @@ export function drumView(m: LaundryModel, d: DrumModel, ctx: ViewCtx): DrumView 
       v.tint = "paused";
       v.icon = "mdi:pause-circle";
       v.iconMuted = false;
-      v.eyebrow = tr("eyebrow.paused", { phase: phaseLabel(lang, d).toLocaleLowerCase() });
+      const phase = phaseLabel(lang, d).toLocaleLowerCase();
+      v.eyebrow = tr("eyebrow.paused", { phase });
       v.hero = t(lang, "status.paused");
-      if (d.remaining !== undefined) {
-        v.support = tr("support.paused", { d: dur(d.remaining) });
-        ariaParts.push(t(lang, "a11y.paused"), t(lang, "a11y.left", { d: fmtDurationLong(d.remaining, lang) }));
-      } else ariaParts.push(t(lang, "a11y.paused"));
+      ariaParts.push(t(lang, "a11y.paused_during", { phase }));
+      if (d.remaining !== undefined)
+        sup(tr("support.paused", { d: dur(d.remaining) }), t(lang, "a11y.left", { d: long(d.remaining) }));
       v.attention = "warning";
       break;
     }
@@ -220,20 +234,19 @@ export function drumView(m: LaundryModel, d: DrumModel, ctx: ViewCtx): DrumView 
       v.eyebrow = tr("eyebrow.finished");
       v.hero = t(lang, "status.done");
       ariaParts.push(t(lang, "a11y.done"));
+      const at = d.finishedAt !== undefined ? fmtPastClock(d.finishedAt, now, ctx.time) : undefined;
       if (d.blockingNotice) {
-        v.support = noticeText(lang, d.blockingNotice);
+        sup(noticeText(lang, d.blockingNotice));
         v.supportIcon = "mdi:alert";
-        ariaParts.push(v.support.toLocaleLowerCase());
-      } else {
-        let s =
-          d.finishedAt !== undefined
-            ? tr("support.finished_at", { time: fmtPastClock(d.finishedAt, now, ctx.time) })
-            : t(lang, "support.ready_unload");
-        if (d.doorLocked === true) s += ` · ${t(lang, "support.door_locked")}`;
-        v.support = s;
-        if (d.finishedAt !== undefined)
-          ariaParts.push(t(lang, "a11y.finished_at", { time: fmtPastClock(d.finishedAt, now, ctx.time) }));
-      }
+        if (at) sup(t(lang, "support.finished_lc", { time: at }));
+      } else if (d.doorLocked === true) {
+        // Never "ready to unload" next to "door still locked": the safety detail comes first.
+        sup(t(lang, "support.door_locked"));
+        if (at) sup(t(lang, "support.finished_lc", { time: at }));
+      } else if (at) {
+        sup(t(lang, "support.finished_at", { time: at }));
+        sup(t(lang, "support.ready_unload_lc"));
+      } else sup(t(lang, "support.ready_unload"));
       break;
     }
     case "tumbling": {
@@ -242,35 +255,40 @@ export function drumView(m: LaundryModel, d: DrumModel, ctx: ViewCtx): DrumView 
       v.iconMuted = false;
       v.hero = t(lang, "status.done");
       ariaParts.push(t(lang, "a11y.tumbling"));
+      sup(t(lang, "support.unload_any_time"));
       if (d.key === "dryer") {
         v.eyebrow = tr("eyebrow.anticrease");
-        v.support =
-          d.antiCrease && d.antiCrease > 0
-            ? tr("support.anticrease", { n: d.antiCrease })
-            : t(lang, "support.anticrease_short");
+        if (d.antiCrease && d.antiCrease > 0)
+          sup(t(lang, "support.anticrease_left", { n: d.antiCrease }), t(lang, "a11y.anticrease_left", { d: long(d.antiCrease) }));
+        else sup(t(lang, "support.anticrease_short"));
       } else {
         v.eyebrow = tr("eyebrow.tumbling");
-        v.support = t(lang, "support.tumble_washer");
+        sup(t(lang, "support.tumble_washer"));
       }
       break;
     }
   }
 
+  v.support = parts.length ? parts.map((p) => p.text).join(" · ") : undefined;
+  for (const p of parts) ariaParts.push(lowerFirst(p.spoken ?? p.text));
   // Notices in the sentence (idle and done mostly; harmless elsewhere).
-  for (const n of d.notices) ariaParts.push(noticeText(lang, n).toLocaleLowerCase());
-  if (m.fault.on) ariaParts.push(t(lang, "a11y.fault"));
+  for (const n of d.notices) ariaParts.push(lowerFirst(noticeText(lang, n)));
+  if (ctx.controlsVisible && d.remote === true && !m.machineOff) ariaParts.push(t(lang, "a11y.remote_on"));
 
-  if (m.fault.on) v.attention = "error";
-  else if (!v.attention && d.notices.length) v.attention = "warning";
+  if (!v.attention && d.notices.length) v.attention = "warning";
 
   v.short = (v.heroApprox ? "~" : "") + v.hero;
   v.aria = t(lang, "a11y.sentence", { Drum: name, parts: ariaParts.filter(Boolean).join(", ") });
   return v;
 }
 
+/** Lower-cases the first letter only, so clock suffixes ("AM") survive. */
+function lowerFirst(s: string): string {
+  return s ? s.charAt(0).toLocaleLowerCase() + s.slice(1) : s;
+}
+
 /** Clock text used inside headlines ("~5:07 pm"). */
 function headClock(d: DrumModel, ctx: ViewCtx): string | undefined {
-  if (d.status === "paused") return t(ctx.lang, "status.paused").toLocaleLowerCase();
   if (d.finishAt === undefined) return undefined;
   return (d.approximate ? "~" : "") + fmtClock(d.finishAt, ctx.now, ctx.time);
 }
@@ -288,13 +306,11 @@ export function headline(m: LaundryModel, drums: DrumModel[], ctx: ViewCtx): str
   const active = drums.filter((d) => d.isActive);
   if (drums.length > 1 && doneLike.length === drums.length) return t(lang, "head.all_ready");
   if (doneLike.length === 1 && active.length === 1) {
+    const other = t(lang, `drum.${active[0].key}`);
+    if (active[0].status === "paused")
+      return t(lang, "head.drum_ready_other_paused", { ...vars(doneLike[0]), other });
     const time = headClock(active[0], ctx);
-    if (time)
-      return t(lang, "head.drum_ready_other", {
-        ...vars(doneLike[0]),
-        other: t(lang, `drum.${active[0].key}`),
-        time,
-      });
+    if (time) return t(lang, "head.drum_ready_other", { ...vars(doneLike[0]), other, time });
   }
   if (doneLike.length >= 1) return t(lang, "head.drum_ready", vars(doneLike[0]));
   if (active.length === 2 && active.every((d) => d.status !== "paused" && d.finishAt !== undefined)) {

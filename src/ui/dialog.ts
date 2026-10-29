@@ -81,6 +81,9 @@ export function renderDialogContent(
 ): TemplateResult {
   const c = dialogCopy(lang, d, state.cmd);
   const vars = drumVars(lang, d.key);
+  // The role=status region is always present and only filled when the state changes, so the
+  // change is announced. Buttons are in visual order (safe first, confirm last); initial focus
+  // goes to [data-safe] whatever its position.
   return html`<h2 id="dlg-title">${c.title}</h2>
     ${c.body ? html`<p id="dlg-body">${c.body}</p>` : nothing}
     ${c.rows
@@ -90,11 +93,11 @@ export function renderDialogContent(
           )}
         </ul>`
       : nothing}
-    ${changed
-      ? html`<div class="changed" role="status" id="dlg-changed">
-          <ha-icon icon="mdi:alert" aria-hidden="true"></ha-icon><span>${t(lang, "dlg.changed", vars)}</span>
-        </div>`
-      : nothing}
+    <div class="changed ${changed ? "" : "empty"}" role="status" id="dlg-changed">
+      ${changed
+        ? html`<ha-icon icon="mdi:alert" aria-hidden="true"></ha-icon><span>${t(lang, "dlg.changed", vars)}</span>`
+        : nothing}
+    </div>
     <div class="dlg-actions">
       <button class="btn ${c.confirmStyle === "filled" ? "tonal" : "filled"}" type="button" data-safe autofocus @click=${onSafe}>
         ${c.safe}

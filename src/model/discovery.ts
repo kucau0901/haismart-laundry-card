@@ -56,12 +56,36 @@ export const slugify = (name: string): string =>
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
 
+// Registry rows grouped by device, built once per hass.entities identity. Every lookup below goes
+// through this map, so discovery is O(rows of one device) instead of O(devices x entities).
+let rowsMemo = new WeakMap<object, Map<string, EntityRegistryDisplayEntry[]>>();
+const NO_ROWS: EntityRegistryDisplayEntry[] = [];
+
+/** deviceId -> haismart registry rows, memoised on the hass.entities object. */
+export function haismartRowsByDevice(hass: HomeAssistant): Map<string, EntityRegistryDisplayEntry[]> {
+  const entities = hass.entities ?? {};
+  let map = rowsMemo.get(entities);
+  if (map) return map;
+  map = new Map();
+  for (const row of Object.values(entities)) {
+    if (row.platform !== PLATFORM || !row.device_id) continue;
+    const list = map.get(row.device_id);
+    if (list) list.push(row);
+    else map.set(row.device_id, [row]);
+  }
+  rowsMemo.set(entities, map);
+  return map;
+}
+
 /** All haismart registry rows of a device. */
 export function deviceEntities(hass: HomeAssistant, deviceId: string): EntityRegistryDisplayEntry[] {
-  const out: EntityRegistryDisplayEntry[] = [];
-  for (const row of Object.values(hass.entities ?? {})) {
-    if (row.device_id === deviceId && row.platform === PLATFORM) out.push(row);
-  }
+  return haismartRowsByDevice(hass).get(deviceId) ?? NO_ROWS;
+}
+
+/** Entity ids of every haismart row (all devices): what shouldUpdate watches before discovery succeeds. */
+export function allHaismartEntityIds(hass: HomeAssistant): string[] {
+  const out: string[] = [];
+  for (const rows of haismartRowsByDevice(hass).values()) for (const r of rows) out.push(r.entity_id);
   return out;
 }
 
@@ -75,31 +99,38 @@ export function isLaundryDevice(hass: HomeAssistant, deviceId: string): boolean 
       return true; // (b)
   }
   if (getCachedIndex(deviceId)) return true; // (c)
-  const oid = (eid: string) => objectIdOf(eid);
-  return rows.some((r) => PHASE_SLUGS.some((s) => oid(r.entity_id).endsWith(s))); // (d)
+  return rows.some((r) => PHASE_SLUGS.some((s) => objectIdOf(r.entity_id).endsWith(s))); // (d)
 }
 
+/** Laundry devices in hass.devices order. Only devices with haismart rows are examined. */
 export function findLaundryDevices(hass: HomeAssistant): string[] {
-  return Object.keys(hass.devices ?? {}).filter((id) => isLaundryDevice(hass, id));
+  const byDevice = haismartRowsByDevice(hass);
+  const out: string[] = [];
+  for (const id of Object.keys(hass.devices ?? {})) if (byDevice.has(id) && isLaundryDevice(hass, id)) out.push(id);
+  return out;
 }
 
 export function isRegistryLoaded(hass: HomeAssistant | undefined): hass is HomeAssistant {
   return !!hass && !!hass.entities && !!hass.devices && !!hass.states;
 }
 
+/**
+ * Which device the card shows. With a configured device_id only that device is checked; the
+ * candidate list (for the editor's multi-device warning) is then just that device.
+ */
 export function resolveDevice(hass: HomeAssistant | undefined, config: Pick<LaundryCardConfig, "device_id">): Resolution {
   if (!isRegistryLoaded(hass)) return { kind: "loading" };
-  const candidates = findLaundryDevices(hass);
   if (config.device_id) {
     if (!hass.devices[config.device_id]) return { kind: "removed" };
-    if (!candidates.includes(config.device_id))
+    if (!isLaundryDevice(hass, config.device_id))
       return {
         kind: "not_laundry",
         deviceId: config.device_id,
         name: deviceDisplayName(hass, config.device_id, undefined),
       };
-    return { kind: "ok", deviceId: config.device_id, candidates };
+    return { kind: "ok", deviceId: config.device_id, candidates: [config.device_id] };
   }
+  const candidates = findLaundryDevices(hass);
   if (!candidates.length) return { kind: "none" };
   return { kind: "ok", deviceId: candidates[0], candidates };
 }
@@ -152,10 +183,23 @@ function storeCachedIndex(index: DeviceIndex): void {
   lsSet(LS_PREFIX + index.deviceId, JSON.stringify(index));
 }
 
-/** Test hook. */
+/** Test hook: clears the in-memory cache, the registry memos and the localStorage mirror. */
 export function clearIndexCache(): void {
   memCache.clear();
   memo = new WeakMap();
+  rowsMemo = new WeakMap();
+  try {
+    const ls = globalThis.localStorage;
+    if (!ls) return;
+    const keys: string[] = [];
+    for (let i = 0; i < ls.length; i++) {
+      const k = ls.key(i);
+      if (k && k.startsWith(LS_PREFIX)) keys.push(k);
+    }
+    for (const k of keys) ls.removeItem(k);
+  } catch {
+    /* blocked storage */
+  }
 }
 
 // ---------------------------------------------------------------------------------------------

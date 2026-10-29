@@ -21,6 +21,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - name: Bundle size budget
+        run: npm run size
       - name: Check dist/ is up to date
         run: |
           if ! git diff --exit-code -- dist/; then

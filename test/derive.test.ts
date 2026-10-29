@@ -163,7 +163,7 @@ describe("fixture 1: the real snapshot", () => {
     const ctx = vctx(hass);
     const w = drumView(m, m.washer, ctx);
     const d = drumView(m, m.dryer, ctx);
-    expect(w.hero).toBe("Ready");
+    expect(w.hero).toBe("Idle");
     expect(w.support).toBe("AI Wash · about 1 h 8 min");
     expect(w.programmeChip).toBeUndefined(); // remote is off
     expect(d.eyebrow).toBe("Dryer · Estimating time…");
@@ -171,9 +171,11 @@ describe("fixture 1: the real snapshot", () => {
     expect(d.hero).toBe("5:05 PM");
     expect(d.heroApprox).toBe(true);
     expect(d.support).toBe("about 7 h 50 min · estimate improves once drying starts");
-    expect(headline(m, [m.washer, m.dryer], ctx)).toBe("Dryer done ~5:05 PM");
-    expect(d.aria).toContain("Dryer: running, estimating time, finishes around 5:05 PM, in about 7 hours 50 minutes");
-    expect(w.aria).toBe("Washer: ready, programme AI Wash, softener empty");
+    expect(headline(m, [m.washer, m.dryer], ctx)).toBe("Dryer finishes ~5:05 PM");
+    expect(d.aria).toBe(
+      "Dryer: running, estimating time, finishes around 5:05 PM, in about 7 hours 50 minutes, estimate improves once drying starts",
+    );
+    expect(w.aria).toBe("Washer: idle, programme AI Wash, takes about 1 hour 8 minutes, softener empty");
   });
 });
 
@@ -245,9 +247,15 @@ describe("statuses", () => {
     expect(m.dryer.startsAt).toBe(AT_MS + 120 * MIN);
     expect(m.dryer.finishAt).toBe(roundTo5(AT_MS + 210 * MIN));
     const v = drumView(m, m.dryer, vctx(hass));
-    expect(v.heroApprox).toBe(true);
-    expect(v.support).toBe("Starts in 2 h");
+    // Same hero as the scheduled washer; both clocks are labelled.
+    expect(v.hero).toBe("Scheduled");
+    expect(v.heroApprox).toBe(false);
+    expect(v.support).toBe("Starts 11:17 AM · done ~12:45 PM");
+    expect(v.aria).toContain("starts in 2 hours, finishes around 12:45 PM");
     expect(drumActions(m.dryer)).toEqual({ secondary: "cancel_scheduled" });
+    expect(commandConfirmed("cancel_scheduled", m.dryer)).toBe(false);
+    expect(commandConfirmed("cancel_scheduled", { ...m.dryer, status: "idle", phase: 0 })).toBe(true);
+    expect(commandConfirmed("cancel_scheduled", { ...m.dryer, status: "stale", phase: undefined })).toBe(false);
   });
 
   it("delayed washer: no clock is claimed", () => {
@@ -268,8 +276,13 @@ describe("statuses", () => {
     expect(drumActions(m.dryer)).toEqual({ secondary: "stop" });
     const v = drumView(m, m.dryer, vctx(hass));
     expect(v.hero).toBe("Done");
-    expect(v.support).toBe("Tumbling to prevent creases · 25 min left · unload any time");
+    expect(v.support).toBe("Unload any time · 25 min of anti-crease left");
+    expect(v.aria).toContain("unload any time, 25 minutes of anti-crease left");
     expect(commandConfirmed("stop", { ...m.dryer, phase: 0 })).toBe(true);
+    // Unverified landing phase after anti-crease: Finished also confirms; still tumbling does not.
+    expect(commandConfirmed("stop", { ...m.dryer, status: "done", phase: 6 })).toBe(true);
+    expect(commandConfirmed("stop", m.dryer)).toBe(false);
+    expect(commandConfirmed("stop", { ...m.dryer, status: "stale", phase: undefined })).toBe(false);
   });
 
   it("washer phase 16 is tumbling with no controls", () => {
@@ -277,7 +290,7 @@ describe("statuses", () => {
     const m = modelOf(hass);
     expect(m.washer.status).toBe("tumbling");
     expect(drumActions(m.washer)).toEqual({});
-    expect(drumView(m, m.washer, vctx(hass)).support).toBe("Tumbling to loosen clothes · unload any time");
+    expect(drumView(m, m.washer, vctx(hass)).support).toBe("Unload any time · tumbling to loosen clothes");
   });
 
   it("done with message 14: finished time, maintenance chip, door locked", () => {
@@ -289,8 +302,12 @@ describe("statuses", () => {
     expect(m.washer.notices.map((n) => n.key)).toEqual(["notice.w.4", "notice.w.14"]);
     expect(m.washer.steps?.every((s) => s.state === "complete")).toBe(true);
     const v = drumView(m, m.washer, vctx(hass));
-    expect(v.support).toBe("Finished 9:05 AM · ready to unload · door still locked");
-    expect(headline(m, [m.washer, m.dryer], vctx(hass))).toBe("Washer is ready · Dryer ~3:35 PM") // dryer anchored 90 min earlier;
+    // Locked door: the safety detail first, and never "ready to unload" beside it.
+    expect(v.support).toBe("Door still locked · finished 9:05 AM");
+    expect(v.aria).toContain("door still locked, finished 9:05 AM");
+    expect(headline(m, [m.washer, m.dryer], vctx(hass))).toBe("Washer is ready · Dryer finishes ~3:35 PM"); // dryer anchored 90 min earlier
+    const unlocked = { ...m.washer, doorLocked: false };
+    expect(drumView(m, unlocked, vctx(hass)).support).toBe("Finished 9:05 AM · ready to unload");
   });
 
   it("finished time is hidden when everything changed at once (restart)", () => {
@@ -414,7 +431,8 @@ describe("controls", () => {
   it("remote on: gates by door, programme and settle time", () => {
     const m = modelOf(SCENARIOS["17_remote_on"]());
     expect(gateFor(m, m.washer, "start", { now: AT_MS + 10_000 })).toBeNull();
-    expect(gateFor(m, m.washer, "start", { now: AT_MS + 1_000 })).toBe("applying");
+    // A fresh last_changed alone (machine woke up, HA restarted) is not a programme change.
+    expect(gateFor(m, m.washer, "start", { now: AT_MS + 1_000 })).toBeNull();
     expect(gateFor(m, { ...m.washer, doorOpen: true }, "start", { now: AT_MS + 10_000 })).toBe("door");
     expect(gateFor(m, { ...m.washer, programme: { value: 0 } }, "start", { now: AT_MS + 10_000 })).toBe("programme");
     expect(gateFor(m, m.washer, "start", { now: AT_MS + 10_000, sending: "dryer" })).toBe("busy");
@@ -426,8 +444,14 @@ describe("controls", () => {
     const hass = SCENARIOS["17_remote_on"]();
     const m = modelOf(hass);
     const v = drumView(m, m.washer, vctx(hass));
-    expect(v.programmeChip).toEqual({ label: "AI Wash", entity: "select.laundry_centre_washer_unified_program_settings" });
-    expect(v.support).toBe("about 1 h 8 min");
+    expect(v.programmeChip).toEqual({
+      label: "AI Wash",
+      entity: "select.laundry_centre_washer_unified_program_settings",
+      meta: "about 1 h 8 min",
+      empty: false,
+    });
+    expect(v.support).toBeUndefined();
+    expect(v.aria).toBe("Washer: idle, programme AI Wash, takes about 1 hour 8 minutes, softener empty, remote control on");
   });
 
   it("message 18 is hidden as a notice", () => {
@@ -572,9 +596,9 @@ describe("time", () => {
     expect(timeCtx(scenario({}, { language: "en-GB" }), "ms").fmtLocale).toBe("ms-MY");
     const m = modelOf(hass);
     const v = drumView(m, m.washer, { ...vctx(hass, "ms") });
-    expect(v.hero).toBe("Sedia");
+    expect(v.hero).toBe("Tidak aktif");
     expect(v.support).toBe("AI Wash · kira-kira 1 j 8 min");
-    expect(headline(m, [m.washer, m.dryer], vctx(hass, "ms"))).toMatch(/^Pengering siap ~5:05 PTG$/);
+    expect(headline(m, [m.washer, m.dryer], vctx(hass, "ms"))).toMatch(/^Pengering dijangka siap ~5:05 PTG$/);
   });
 });
 
@@ -601,3 +625,172 @@ describe("error humanisation", () => {
     expect(humaniseError({ message: "Could not send the command to Laundry Centre: timed out" }).detail).toBe("Timed out");
   });
 });
+
+describe("review follow-ups: model", () => {
+  it("humanises the structured websocket error before parsing English", () => {
+    const err = {
+      code: "home_assistant_error",
+      message: "Laundry Centre does not accept that setting: remote control was switched off for the dryer; nothing was sent",
+      translation_domain: "haismart",
+      translation_key: "control_rejected",
+      translation_placeholders: {
+        name: "Laundry Centre",
+        error: "remote control was switched off for the dryer; nothing was sent",
+      },
+    };
+    expect(humaniseError(err)).toEqual({
+      key: "err.remote_off",
+      detail: "Remote control was switched off for the dryer; nothing was sent",
+    });
+    expect(humaniseError({ message: "x", translation_key: "no_status", translation_domain: "haismart" }).key).toBe(
+      "err.no_status",
+    );
+    expect(
+      humaniseError({ message: "y", translation_key: "control_failed", translation_placeholders: { error: "timed out" } }),
+    ).toEqual({ key: "err.unreachable", detail: "Timed out" });
+  });
+
+  it("the exact _recheck_laundry_push wording maps to remote-off (string fallback)", () => {
+    const msg =
+      "Laundry Centre does not accept that setting: remote control was switched off for the washer; nothing was sent";
+    expect(humaniseError({ message: msg }).key).toBe("err.remote_off");
+  });
+
+  it("remote flag missing or unknown gates every command, and is told apart from 'off'", () => {
+    const hass = SCENARIOS["21_both_running"]();
+    for (const eid of Object.keys(hass.states)) if (eid.includes("dryer_remote")) delete hass.states[eid];
+    const m = modelOf(hass);
+    expect(m.dryer.remote).toBeUndefined();
+    expect(m.dryer.remoteState).toBe("missing");
+    for (const cmd of ["start", "resume", "pause", "cancel", "cancel_scheduled", "stop"] as const)
+      expect(gateFor(m, m.dryer, cmd, { now: AT_MS })).toBe("remote");
+    const unknown = modelOf(remoteOnScenario({}, { stateOverride: { dryerRemoteCtrValid: "unavailable" } }));
+    expect(unknown.dryer.remoteState).toBe("unknown");
+    expect(gateFor(unknown, unknown.dryer, "pause", { now: AT_MS })).toBe("remote");
+    expect(modelOf(SCENARIOS["01_real_snapshot"]()).dryer.remoteState).toBe("off");
+    expect(modelOf(SCENARIOS["21_both_running"]()).dryer.remoteState).toBe("on");
+  });
+
+  it("gate results for every command against each status", () => {
+    const now = AT_MS + 60_000;
+    const cases: Array<[string, () => HomeAssistant, "washer" | "dryer"]> = [
+      ["idle", () => remoteOnScenario(), "washer"],
+      ["estimating", () => remoteOnScenario(), "dryer"],
+      ["running", () => SCENARIOS["21_both_running"](), "washer"],
+      ["paused", () => remoteOnScenario({ dryerCyclePhase: 3, dryerRunningMode: 2, dryerRemainingDryTime: 95 }), "dryer"],
+      ["delayed", () => remoteOnScenario({ dryerCyclePhase: 1, dryerRunningMode: 1, dryerRemainingResnTime: 60 }), "dryer"],
+      ["tumbling", () => remoteOnScenario({ dryerCyclePhase: 7, remainingAntiCreaseTime: 25 }), "dryer"],
+    ];
+    for (const [status, build, key] of cases) {
+      const m = modelOf(build());
+      const d = m[key];
+      expect(d.status).toBe(status);
+      for (const cmd of ["start", "resume", "pause", "cancel", "cancel_scheduled", "stop"] as const) {
+        // Remote on, nothing pending, no fault, door closed, programme chosen: every command passes.
+        expect(gateFor(m, d, cmd, { now })).toBeNull();
+        expect(gateFor(m, d, cmd, { now, pending: [key] })).toBe("pending");
+        expect(gateFor(m, d, cmd, { now, sending: key === "washer" ? "dryer" : "washer" })).toBe("busy");
+        expect(gateFor(m, { ...d, remote: undefined }, cmd, { now })).toBe("remote");
+      }
+      const faulty = { ...m, fault: { ...m.fault, on: true } };
+      expect(gateFor(faulty, d, "start", { now })).toBe("fault");
+      expect(gateFor(faulty, d, "resume", { now })).toBe("fault");
+      expect(gateFor(faulty, d, "pause", { now })).toBeNull();
+      expect(gateFor(faulty, d, "cancel", { now })).toBeNull();
+    }
+  });
+
+  it("'Applying programme' follows a real change of value, not last_changed alone", () => {
+    const memory: ModelMemory = {};
+    const first = modelOf(remoteOnScenario(), { memory });
+    expect(first.washer.programme.lastChanged).toBeUndefined();
+    // Machine off and back on with the same programme: no gate.
+    modelOf(remoteOnScenario({}, { off: true }), { memory });
+    const woke = modelOf(remoteOnScenario({}, { at: new Date(AT_MS + 60_000).toISOString() }), { memory, now: AT_MS + 61_000 });
+    expect(gateFor(woke, woke.washer, "start", { now: AT_MS + 61_000 })).toBeNull();
+    // The owner picks another programme: Start waits 5 s.
+    const changedAt = new Date(AT_MS + 120_000).toISOString();
+    const changed = modelOf(remoteOnScenario({ washerUnifiedProgramSettings: 1 }, { at: changedAt }), {
+      memory,
+      now: AT_MS + 121_000,
+    });
+    expect(changed.washer.programme.lastChanged).toBe(AT_MS + 120_000);
+    expect(gateFor(changed, changed.washer, "start", { now: AT_MS + 121_000 })).toBe("applying");
+    expect(gateFor(changed, changed.washer, "start", { now: AT_MS + 126_000 })).toBeNull();
+  });
+
+  it("every support clause is also in the spoken sentence", () => {
+    for (const [name, build] of Object.entries(SCENARIOS)) {
+      const hass = build();
+      const res = resolveDevice(hass, {});
+      if (res.kind !== "ok") continue;
+      const m = derive(hass, buildIndex(hass, res.deviceId), { now: AT_MS });
+      for (const d of [m.washer, m.dryer]) {
+        for (const lang of ["en", "ms"] as const) {
+          const v = drumView(m, d, vctx(hass, lang));
+          for (const p of v.supportParts) {
+            const spoken = (p.spoken ?? p.text).toLocaleLowerCase();
+            expect(v.aria.toLocaleLowerCase(), `${name}/${d.key}/${lang}`).toContain(spoken);
+          }
+          if (v.support) expect(v.support).toBe(v.supportParts.map((p) => p.text).join(" · "));
+        }
+      }
+    }
+  });
+
+  it("resolveDevice stays fast on a large registry", () => {
+    const hass = SCENARIOS["01_real_snapshot"]();
+    // 400 other devices with 10 entities each (other integrations and other haismart devices).
+    for (let i = 0; i < 400; i++) {
+      const dev = `dev-${i}`;
+      hass.devices[dev] = { id: dev, name: `Device ${i}`, name_by_user: null };
+      for (let j = 0; j < 10; j++) {
+        const eid = `sensor.device_${i}_${j}`;
+        hass.entities[eid] = { entity_id: eid, device_id: dev, platform: i % 20 === 0 ? "haismart" : "other" };
+        hass.states[eid] = { entity_id: eid, state: "1", attributes: {}, last_changed: AT, last_updated: AT };
+      }
+    }
+    expect(Object.keys(hass.entities).length).toBeGreaterThan(4000);
+    resolveDevice(hass, {}); // builds the per-registry row map once
+    const runs = 200;
+    const t0 = performance.now();
+    for (let i = 0; i < runs; i++) {
+      resolveDevice({ ...hass, states: { ...hass.states } }, {});
+      resolveDevice(hass, { device_id: MOCK_DEVICE_ID });
+    }
+    const per = (performance.now() - t0) / runs;
+    expect(per).toBeLessThan(2); // was ~85-118 ms before the row map
+    expect(resolveDevice(hass, {})).toMatchObject({ kind: "ok", deviceId: MOCK_DEVICE_ID });
+    expect(resolveDevice(hass, { device_id: MOCK_DEVICE_ID })).toMatchObject({ kind: "ok", candidates: [MOCK_DEVICE_ID] });
+    expect(resolveDevice(hass, { device_id: "dev-0" })).toMatchObject({ kind: "not_laundry" });
+  });
+
+  it("clearIndexCache also clears the localStorage mirror", () => {
+    const store = new Map<string, string>();
+    const ls = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+      key: (i: number) => [...store.keys()][i] ?? null,
+      get length() {
+        return store.size;
+      },
+    };
+    const g = globalThis as { localStorage?: unknown };
+    const prev = g.localStorage;
+    g.localStorage = ls;
+    try {
+      store.set("unrelated", "1");
+      buildIndex(SCENARIOS["01_real_snapshot"](), MOCK_DEVICE_ID);
+      expect([...store.keys()].some((k) => k.startsWith("haismart-laundry-card:index:v1:"))).toBe(true);
+      clearIndexCache();
+      expect([...store.keys()]).toEqual(["unrelated"]);
+    } finally {
+      g.localStorage = prev;
+    }
+  });
+});
+
+function remoteOnScenario(o: Record<string, unknown> = {}, opts: Parameters<typeof scenario>[1] = {}): HomeAssistant {
+  return scenario({ washerRemoteCtrValid: true, dryerRemoteCtrValid: true, ...o }, opts);
+}
