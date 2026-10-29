@@ -1,7 +1,7 @@
 // Presentation layer: LaundryModel -> display strings (§5, §5.3, §11). Pure; no DOM.
 
 import type { DrumKey, LaundryCardConfig, TimeDisplay } from "./types";
-import type { DrumModel, LaundryModel, Notice } from "./model/derive";
+import type { DetailKey, DrumDetail, DrumModel, LaundryModel, Notice } from "./model/derive";
 import { drumVars, t, type Lang } from "./localize";
 import { fmtClock, fmtDuration, fmtDurationLong, fmtPastClock, minutesUntil, type TimeCtx } from "./time";
 
@@ -34,12 +34,23 @@ export interface DrumView {
   supportIcon?: string;
   /** Programme name for the interactive chip (idle, select, remote on), and its duration. */
   programmeChip?: { label: string; entity: string; meta?: string; empty: boolean };
+  /** The details row: programme, temperature, spin, load... Empty when there is nothing to show. */
+  details: DetailView[];
   /** Short text for compact rows and collapsed rows ("~5:07 pm", "Idle"). */
   short: string;
   /** Full sentence for the summary's aria-label. Contains every support part's spoken form. */
   aria: string;
   /** Per-drum attention: notices or paused. Faults are machine-wide (banner), never per drum. */
   attention: "warning" | null;
+}
+
+export interface DetailView {
+  key: DetailKey;
+  icon: string;
+  text: string;
+  /** Spoken form, with what the value is ("spin speed 1000 rpm"). */
+  spoken: string;
+  entity?: string;
 }
 
 export interface ViewCtx {
@@ -49,6 +60,8 @@ export interface ViewCtx {
   timeDisplay: TimeDisplay;
   /** Controls row would be visible (config allows, not compact, controls exist). */
   controlsVisible: boolean;
+  /** Details row enabled in the config. */
+  showDetails?: boolean;
 }
 
 const DRUM_ICON: Record<DrumKey, string> = { washer: "mdi:washing-machine", dryer: "mdi:tumble-dryer" };
@@ -58,6 +71,61 @@ export function phaseLabel(lang: Lang, d: DrumModel): string {
   const key = `phase.${d.key === "washer" ? "w" : "d"}.${d.phase}`;
   const v = t(lang, key);
   return v === key ? t(lang, "phase.working") : v;
+}
+
+const DETAIL_ICON: Record<DetailKey, string> = {
+  programme: "mdi:tshirt-crew-outline",
+  temp: "mdi:thermometer",
+  spin: "mdi:autorenew",
+  load: "mdi:weight-kilogram",
+  heat: "mdi:thermometer",
+  dryness: "mdi:water-percent",
+};
+
+function fmtNumber(n: number, lang: Lang): string {
+  return new Intl.NumberFormat(lang === "ms" ? "ms-MY" : "en", { maximumFractionDigits: 1 }).format(n);
+}
+
+/** The unit shown after a number: the entity's own on an older component, else the published one. */
+const DETAIL_UNIT: Partial<Record<DetailKey, string>> = { temp: "°C", spin: " rpm", load: " kg" };
+
+export function detailView(lang: Lang, d: DrumDetail): DetailView {
+  let text: string;
+  /** A whole phrase on its own ("Cold wash"), so it is not wrapped in "Temperature …". */
+  let word = false;
+  if (d.label !== undefined) {
+    // The card's own translation of the option where it has one; the entity's text otherwise.
+    const key = `detail.${d.key}_${d.value}`;
+    const own = t(lang, key);
+    text = own === key ? d.label : own;
+  } else if (d.value === 0 && (d.key === "temp" || d.key === "spin") && d.unit === undefined) {
+    text = t(lang, d.key === "temp" ? "detail.cold" : "detail.no_spin");
+    word = true;
+  } else {
+    const unit = d.unit !== undefined ? (d.unit.startsWith("°") ? d.unit : ` ${d.unit}`) : (DETAIL_UNIT[d.key] ?? "");
+    text = `${fmtNumber(d.value, lang)}${unit}`;
+  }
+  return {
+    key: d.key,
+    icon: DETAIL_ICON[d.key],
+    text,
+    spoken: word ? text : t(lang, `detail.${d.key}`, { v: text }),
+    entity: d.entity,
+  };
+}
+
+/**
+ * The details row for a drum, or nothing. Off and stale drums have no current settings to show.
+ * An idle drum already names its programme (support line or chip), so it is not repeated; and the
+ * weight it still reports is the last cycle's, so the load is only shown during and after a cycle.
+ */
+function detailsFor(d: DrumModel, ctx: ViewCtx): DetailView[] {
+  if (ctx.showDetails === false || d.generic || d.status === "off" || d.status === "stale") return [];
+  const during = d.isActive || d.isDoneLike;
+  const list = d.details.filter(
+    (x) => !(d.status === "idle" && x.key === "programme") && (x.key !== "load" || during),
+  );
+  return list.map((x) => detailView(ctx.lang, x));
 }
 
 export function noticeText(lang: Lang, n: Notice): string {
@@ -95,6 +163,7 @@ export function drumView(m: LaundryModel, d: DrumModel, ctx: ViewCtx): DrumView 
     heroMuted: false,
     heroApprox: false,
     supportParts: parts,
+    details: [],
     short: "",
     aria: "",
     attention: null,
@@ -255,7 +324,9 @@ export function drumView(m: LaundryModel, d: DrumModel, ctx: ViewCtx): DrumView 
       v.iconMuted = false;
       v.hero = t(lang, "status.done");
       ariaParts.push(t(lang, "a11y.tumbling"));
-      sup(t(lang, "support.unload_any_time"));
+      // Never "unload any time" beside the lock icon.
+      if (d.doorLocked === true) sup(t(lang, "support.door_locked"));
+      else sup(t(lang, "support.unload_any_time"));
       if (d.key === "dryer") {
         v.eyebrow = tr("eyebrow.anticrease");
         if (d.antiCrease && d.antiCrease > 0)
@@ -271,6 +342,13 @@ export function drumView(m: LaundryModel, d: DrumModel, ctx: ViewCtx): DrumView 
 
   v.support = parts.length ? parts.map((p) => p.text).join(" · ") : undefined;
   for (const p of parts) ariaParts.push(lowerFirst(p.spoken ?? p.text));
+  // Not in the summary's sentence: each detail is its own labelled button right after it.
+  v.details = detailsFor(d, ctx);
+  // The lock icon beside the drum's name, in words; same condition as the icon (tile.ts). Not twice
+  // where the support line already says "door still locked".
+  const lockSaid = parts.some((p) => p.text === t(lang, "support.door_locked"));
+  if (d.doorLocked === true && (d.isActive || d.isDoneLike) && !m.machineOff && !lockSaid)
+    ariaParts.push(lowerFirst(t(lang, "door.locked")));
   // Notices in the sentence (idle and done mostly; harmless elsewhere).
   for (const n of d.notices) ariaParts.push(lowerFirst(noticeText(lang, n)));
   if (ctx.controlsVisible && d.remote === true && !m.machineOff) ariaParts.push(t(lang, "a11y.remote_on"));

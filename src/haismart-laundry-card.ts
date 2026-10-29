@@ -43,6 +43,7 @@ export const DEFAULTS: Omit<ResolvedConfig, "type"> = {
   collapse_idle: true,
   show_notices: true,
   show_stepper: true,
+  show_details: true,
   show_totals: false,
   show_controls: "auto",
   confirm_start: false,
@@ -60,7 +61,7 @@ const ENUMS: Record<string, readonly string[]> = {
   off_style: ["keep", "collapse"],
   language: ["auto", "en", "ms"],
 };
-const BOOLS = ["collapse_idle", "show_notices", "show_stepper", "show_totals", "confirm_start"];
+const BOOLS = ["collapse_idle", "show_notices", "show_stepper", "show_details", "show_totals", "confirm_start"];
 const STRINGS = ["device_id", "title"];
 const KNOWN = new Set(["type", "tap_action", "grid_options", "view_layout", "visibility", "card_mod", ...Object.keys(ENUMS), ...BOOLS, ...STRINGS]);
 const warnedKeys = new Set<string>();
@@ -319,6 +320,7 @@ export class HaismartLaundryCard extends LitElement {
       timeDisplay: resolvedTimeDisplay(this._config!),
       controlsVisible:
         this._config!.show_controls !== "never" && this._effLayout() !== "compact" && !!this._model?.controlsExist,
+      showDetails: this._config!.show_details,
     };
   }
 

@@ -2,6 +2,7 @@
 // from the real decoded snapshot (fixture 1) with the overrides that scenario needs.
 
 import snapshot from "./snapshot_dryer_running_washer_idle.json";
+import washing from "./snapshot_washer_running_dryer_idle.json";
 import { buildHass, mergeHass, type MockOptions } from "../../src/mock/build-hass";
 import type { HomeAssistant } from "../../src/types";
 
@@ -10,11 +11,17 @@ export const AT = "2026-10-29T01:17:00.000Z";
 export const AT_MS = Date.parse(AT);
 export const TZ = "Asia/Kuala_Lumpur";
 export const SNAPSHOT = snapshot as Record<string, unknown>;
+/** Real snapshot 2 (2026-10-29 18:2x): washer on AI Wash, washing, started at the panel; dryer idle. */
+export const WASHING = washing as Record<string, unknown>;
 
 const minutesBefore = (min: number) => new Date(AT_MS - min * 60_000).toISOString();
 
 export function scenario(overrides: Record<string, unknown> = {}, opts: MockOptions = {}): HomeAssistant {
   return buildHass({ ...SNAPSHOT, ...overrides }, { at: AT, timeZone: TZ, controls: true, ...opts });
+}
+
+export function washingScenario(overrides: Record<string, unknown> = {}, opts: MockOptions = {}): HomeAssistant {
+  return buildHass({ ...WASHING, ...overrides }, { at: AT, timeZone: TZ, controls: true, ...opts });
 }
 
 export const SCENARIOS: Record<string, () => HomeAssistant> = {
@@ -25,7 +32,9 @@ export const SCENARIOS: Record<string, () => HomeAssistant> = {
   "06_delayed_dryer": () =>
     scenario({ dryerCyclePhase: 1, dryerRunningMode: 1, dryerRemainingResnTime: 120, dryerRemainingDryTime: 90 }),
   "07_delayed_washer": () => scenario({ laundryCyclePhase: 15, washerRunningMode: 1, remainingTimeHH: 1, remainingTimeMM: 30 }),
-  "08_anti_crease": () => scenario({ dryerCyclePhase: 7, remainingAntiCreaseTime: 25, dryerRemainingDryTime: 0 }),
+  // The real dryer releases its door lock at the end of drying (2026-10-29 00:42:34).
+  "08_anti_crease": () =>
+    scenario({ dryerCyclePhase: 7, remainingAntiCreaseTime: 25, dryerRemainingDryTime: 0, dryerDoorLockStatus: false }),
   "09_washer_tumbling": () => scenario({ laundryCyclePhase: 16 }),
   "10_done_msg14": () =>
     scenario(
@@ -44,6 +53,7 @@ export const SCENARIOS: Record<string, () => HomeAssistant> = {
   "19_two_devices": () =>
     mergeHass(scenario(), scenario({}, { deviceId: "second-laundry", deviceName: "Laundry Upstairs" })),
   "20_non_laundry": () => airConditioner(),
+  "22_real_washing": () => washingScenario(),
   "21_both_running": () =>
     scenario({
       laundryCyclePhase: 5,

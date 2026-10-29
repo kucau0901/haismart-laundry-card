@@ -251,6 +251,10 @@ function labelRow(ctx: RenderCtx, d: DrumModel, v: DrumView): TemplateResult {
       : nothing}
     <span class="eyebrow ellipsis"><span id="name-${d.key}">${v.name}</span>${rest}</span>
     <span class="label-icons">
+      ${d.doorLocked === true && (d.isActive || d.isDoneLike) && !ctx.model.machineOff
+        ? // The summary's sentence says the door is locked (view.ts, same condition); visual only.
+          html`<ha-icon icon="mdi:lock" title=${t(ctx.lang, "door.locked")} aria-hidden="true"></ha-icon>`
+        : nothing}
       ${showRemoteOn
         ? // The state is in the summary's sentence ("remote control on"); the icon is visual only.
           html`<ha-icon icon="mdi:remote" title=${t(ctx.lang, "remote.on")} aria-hidden="true"></ha-icon>`
@@ -331,10 +335,36 @@ export function renderTile(ctx: RenderCtx, d: DrumModel, opts: { collapsible?: b
           ${showHint ? html`<span class="hint" id="hint-${d.key}">${t(ctx.lang, "support.pick_hint")}</span>` : nothing}
         </div>`
       : nothing}
+    ${renderDetails(ctx, d)}
     ${ctx.config.show_stepper ? renderStepper(ctx.lang, d.steps) : nothing}
     ${renderNotices(ctx, d)}
     ${renderControls(ctx, d)}
   </section>`;
+}
+
+/** What the drum is running with: one small chip per setting, each opening its entity. */
+export function renderDetails(ctx: RenderCtx, d: DrumModel): TemplateResult | typeof nothing {
+  const items = ctx.views[d.key].details;
+  if (!items.length) return nothing;
+  const vars = drumVars(ctx.lang, d.key);
+  return html`<ul class="details" aria-label=${t(ctx.lang, "detail.list", vars)}>
+    ${items.map(
+      (x) => html`<li>
+        <button
+          class="detail"
+          type="button"
+          data-detail=${x.key}
+          data-focus-key="detail-${d.key}-${x.key}"
+          aria-label=${x.spoken}
+          title=${x.spoken}
+          ?disabled=${!x.entity}
+          @click=${() => ctx.on.moreInfo(x.entity)}
+        >
+          <ha-icon .icon=${x.icon} aria-hidden="true"></ha-icon><span>${x.text}</span>
+        </button>
+      </li>`,
+    )}
+  </ul>`;
 }
 
 const DRUM_ICON: Record<DrumModel["key"], string> = { washer: "mdi:washing-machine", dryer: "mdi:tumble-dryer" };

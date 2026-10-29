@@ -34,5 +34,10 @@ export const SAMPLE_VALUES: Record<string, unknown> = {
   "washerTotalElectricityUsed": 0.28,
   "totalWashCycle": 1,
   "currentWaterUsed": 0,
-  "washerCurrentElectricityUsed": 0
+  "washerCurrentElectricityUsed": 0,
+  "washTemp": 30,
+  "spinSpeed": 1000,
+  "washerActualWeight": 1,
+  "dryerTempLevel": 4,
+  "dryerDryLevel": 3
 };

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import contract from "./fixtures/entity_contract.json";
-import { AT, AT_MS, SCENARIOS, SNAPSHOT, TZ, airConditioner, scenario } from "./fixtures/scenarios";
+import { AT, AT_MS, SCENARIOS, SNAPSHOT, TZ, airConditioner, scenario, washingScenario } from "./fixtures/scenarios";
 import {
   CONTRACT,
   buildIndex,
@@ -173,7 +173,7 @@ describe("fixture 1: the real snapshot", () => {
     expect(d.support).toBe("about 7 h 50 min · estimate improves once drying starts");
     expect(headline(m, [m.washer, m.dryer], ctx)).toBe("Dryer finishes ~5:05 PM");
     expect(d.aria).toBe(
-      "Dryer: running, estimating time, finishes around 5:05 PM, in about 7 hours 50 minutes, estimate improves once drying starts",
+      "Dryer: running, estimating time, finishes around 5:05 PM, in about 7 hours 50 minutes, estimate improves once drying starts, door locked",
     );
     expect(w.aria).toBe("Washer: idle, programme AI Wash, takes about 1 hour 8 minutes, softener empty");
   });
@@ -796,3 +796,121 @@ describe("review follow-ups: model", () => {
 function remoteOnScenario(o: Record<string, unknown> = {}, opts: Parameters<typeof scenario>[1] = {}): HomeAssistant {
   return scenario({ washerRemoteCtrValid: true, dryerRemoteCtrValid: true, ...o }, opts);
 }
+
+describe("details row", () => {
+  it("fixture 2: the washer started at the panel shows what it is running with", () => {
+    const hass = washingScenario();
+    const m = modelOf(hass);
+    expect(m.washer.status).toBe("running");
+    expect(m.washer.details.map((x) => [x.key, x.value, x.label])).toEqual([
+      ["programme", 56, "AI Wash"],
+      ["temp", 30, undefined],
+      ["spin", 1000, undefined],
+      ["load", 4, undefined],
+    ]);
+    const v = drumView(m, m.washer, vctx(hass));
+    expect(v.details.map((x) => x.text)).toEqual(["AI Wash", "30°C", "1,000 rpm", "4 kg"]);
+    expect(v.details.map((x) => x.spoken)).toEqual([
+      "Programme AI Wash",
+      "Temperature 30°C",
+      "Spin speed 1,000 rpm",
+      "Load 4 kg",
+    ]);
+    expect(v.details.every((x) => !!x.entity && hass.states[x.entity!])).toBe(true);
+    expect(v.aria).toContain("door locked");
+  });
+
+  it("an idle drum does not repeat its programme, and an unweighed load is left out", () => {
+    const hass = washingScenario();
+    const m = modelOf(hass);
+    expect(m.dryer.status).toBe("idle");
+    // dryerWeight is null in the capture: not shown as 0 kg or "–".
+    expect(m.dryer.details.map((x) => x.key)).toEqual(["programme", "heat", "dryness"]);
+    const v = drumView(m, m.dryer, vctx(hass));
+    expect(v.details.map((x) => x.text)).toEqual(["High heat", "Cupboard dry"]);
+    expect(drumView(m, m.dryer, vctx(hass, "ms")).details.map((x) => x.text)).toEqual([
+      "Haba tinggi",
+      "Kering untuk disimpan",
+    ]);
+  });
+
+  it("an idle drum's weight is the last cycle's, so the load waits for a cycle", () => {
+    const hass = washingScenario({ laundryCyclePhase: 0, washerRunningMode: 2 });
+    const m = modelOf(hass);
+    expect(m.washer.status).toBe("idle");
+    expect(drumView(m, m.washer, vctx(hass)).details.map((x) => x.text)).toEqual(["30°C", "1,000 rpm"]);
+    const done = washingScenario({ laundryCyclePhase: 14 });
+    const md = modelOf(done);
+    expect(drumView(md, md.washer, vctx(done)).details.map((x) => x.key)).toContain("load");
+  });
+
+  it("the lock icon's state is in the sentence whenever the icon shows, and never twice", () => {
+    const tumbling = washingScenario({ laundryCyclePhase: 16 });
+    const mt = modelOf(tumbling);
+    const vt = drumView(mt, mt.washer, vctx(tumbling));
+    expect(vt.support).toContain("Door still locked");
+    expect(vt.support).not.toContain("Unload any time");
+    const blocked = washingScenario({ laundryCyclePhase: 14, washerMessage: 8 });
+    const mb = modelOf(blocked);
+    expect(drumView(mb, mb.washer, vctx(blocked)).aria).toContain("door locked");
+    const done = washingScenario({ laundryCyclePhase: 14 });
+    const md = modelOf(done);
+    const vd = drumView(md, md.washer, vctx(done));
+    expect(vd.support).toContain("Door still locked");
+    expect(vd.aria.match(/door (still )?locked/gi)).toHaveLength(1);
+  });
+
+  it("an older component's converted reading keeps its own unit", () => {
+    const hass = washingScenario({}, { legacy: true, stateOverride: { washTemp: "86" } });
+    hass.states["number.laundry_centre_wash_temp"].attributes.unit_of_measurement = "°F";
+    const m = modelOf(hass);
+    expect(drumView(m, m.washer, vctx(hass)).details.find((x) => x.key === "temp")?.text).toBe("86°F");
+  });
+
+  it("cold water and no spin are words, not 0°C and 0 rpm; ms translates them", () => {
+    const hass = washingScenario({ washTemp: 0, spinSpeed: 0, washerActualWeight: 0 });
+    const m = modelOf(hass);
+    const v = drumView(m, m.washer, vctx(hass));
+    expect(v.details.map((x) => x.text)).toEqual(["AI Wash", "Cold wash", "No spin"]);
+    expect(v.details.map((x) => x.spoken)).toEqual(["Programme AI Wash", "Cold wash", "No spin"]);
+    expect(drumView(m, m.washer, vctx(hass, "ms")).details.map((x) => x.spoken)).toEqual([
+      "Program AI Wash",
+      "Basuhan air sejuk",
+      "Tanpa putaran",
+    ]);
+    // ms-MY groups thousands the same way.
+    const fast = washingScenario({ spinSpeed: 1400 });
+    const mf = modelOf(fast);
+    expect(drumView(mf, mf.washer, vctx(fast, "ms")).details.find((x) => x.key === "spin")?.text).toBe("1,400 rpm");
+  });
+
+  it("nothing while the machine is off, a drum is stale, or the row is turned off", () => {
+    const off = SCENARIOS["02_machine_off"]();
+    const mo = modelOf(off);
+    expect(drumView(mo, mo.washer, vctx(off)).details).toEqual([]);
+    const stale = washingScenario({}, { stateOverride: { laundryCyclePhase: "unknown" } });
+    const ms = modelOf(stale);
+    expect(drumView(ms, ms.washer, vctx(stale)).details).toEqual([]);
+    const hass = washingScenario();
+    const m = modelOf(hass);
+    expect(drumView(m, m.washer, { ...vctx(hass), showDetails: false }).details).toEqual([]);
+  });
+
+  it("an unavailable setting is left out, the rest stay", () => {
+    const hass = washingScenario({}, { stateOverride: { spinSpeed: "unavailable" } });
+    const m = modelOf(hass);
+    expect(m.washer.details.map((x) => x.key)).toEqual(["programme", "temp", "load"]);
+  });
+
+  it("an older component without haier_value still reads the settings", () => {
+    const hass = washingScenario({}, { legacy: true });
+    const m = modelOf(hass);
+    expect(m.washer.details.map((x) => [x.key, x.value])).toEqual([
+      ["programme", 56],
+      ["temp", 30],
+      ["spin", 1000],
+      ["load", 4],
+    ]);
+    expect(m.dryer.details.find((x) => x.key === "heat")?.label).toBe("High temperature");
+  });
+});

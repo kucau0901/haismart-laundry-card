@@ -12,6 +12,7 @@ export interface ResolvedConfig extends LaundryCardConfig {
   collapse_idle: boolean;
   show_notices: boolean;
   show_stepper: boolean;
+  show_details: boolean;
   show_totals: boolean;
   show_controls: "auto" | "never";
   confirm_start: boolean;

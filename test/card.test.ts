@@ -5,7 +5,7 @@ import type { HaismartLaundryCard } from "../src/haismart-laundry-card";
 import { HaismartLaundryCard as CardClass, layoutForWidth, validateConfig } from "../src/haismart-laundry-card";
 import { clearIndexCache } from "../src/model";
 import { MOCK_DEVICE_ID } from "../src/mock/build-hass";
-import { SCENARIOS, airConditioner, scenario } from "./fixtures/scenarios";
+import { SCENARIOS, airConditioner, scenario, washingScenario } from "./fixtures/scenarios";
 import { CONFIRM_TIMEOUT_MS, CONFIRMED_DISPLAY_MS } from "../src/controls";
 import type { HomeAssistant, LaundryCardConfig } from "../src/types";
 
@@ -667,5 +667,30 @@ describe("haismart-laundry-card", () => {
     vi.advanceTimersByTime(61_000);
     await flush(el);
     expect(text(el)).toContain("in 47 min");
+  });
+
+  it("shows the running washer's programme, temperature, spin and load, each opening its entity", async () => {
+    const el = await mount(washingScenario());
+    const row = root(el).querySelector<HTMLUListElement>(".details")!;
+    expect(row).not.toBeNull();
+    expect(row.getAttribute("aria-label")).toBe("Washer settings");
+    const items = [...row.querySelectorAll<HTMLButtonElement>("button.detail")];
+    expect(items.map((b) => b.textContent!.trim())).toEqual(["AI Wash", "30°C", "1,000 rpm", "4 kg"]);
+    expect(items[2].getAttribute("aria-label")).toBe("Spin speed 1,000 rpm");
+    const opened: string[] = [];
+    el.addEventListener("hass-more-info", (e) => opened.push((e as CustomEvent).detail.entityId));
+    items[1].click();
+    expect(opened).toEqual(["number.laundry_centre_wash_temp"]);
+    expect(root(el).querySelector('.label-row ha-icon[icon="mdi:lock"]')).not.toBeNull();
+  });
+
+  it("show_details: false hides the row", async () => {
+    const el = await mount(washingScenario(), { show_details: false });
+    expect(root(el).querySelector(".details")).toBeNull();
+  });
+
+  it("the compact layout has no details row", async () => {
+    const el = await mount(washingScenario(), {}, "compact");
+    expect(root(el).querySelector(".details")).toBeNull();
   });
 });

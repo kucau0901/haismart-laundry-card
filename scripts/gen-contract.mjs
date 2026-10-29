@@ -20,6 +20,9 @@ const KEY_ATTRIBUTES = [
   "washerDryMode", "dryerDryMode",
   "totalWaterUsed", "washerTotalElectricityUsed", "totalWashCycle",
   "currentWaterUsed", "washerCurrentElectricityUsed",
+  // The details row: what each drum is running with.
+  "washTemp", "spinSpeed", "washerActualWeight",
+  "dryerTempLevel", "dryerDryLevel", "dryerWeight",
 ];
 
 const src = new URL("../test/fixtures/entity_contract.json", import.meta.url);

@@ -623,6 +623,60 @@ export const CONTRACT: Record<string, ContractAttribute> = {
     "report": "6D02",
     "unit": "kWh",
     "options": null
+  },
+  "washTemp": {
+    "name": "Wash temp",
+    "control": "number",
+    "report": "6D02",
+    "unit": "°C",
+    "options": null
+  },
+  "spinSpeed": {
+    "name": "Spin speed",
+    "control": "number",
+    "report": "6D02",
+    "unit": null,
+    "options": null
+  },
+  "washerActualWeight": {
+    "name": "Washer actual weight",
+    "control": "sensor",
+    "report": "6D02",
+    "unit": "kg",
+    "options": null
+  },
+  "dryerTempLevel": {
+    "name": "Dryer temp level",
+    "control": "select",
+    "report": "6D01",
+    "unit": null,
+    "options": {
+      "1": "Cool air",
+      "2": "Low temperature",
+      "3": "Medium temperature",
+      "4": "High temperature"
+    }
+  },
+  "dryerDryLevel": {
+    "name": "Dryer dry level",
+    "control": "select",
+    "report": "6D01",
+    "unit": null,
+    "options": {
+      "0": "Timed (no auto sensing)",
+      "1": "Iron dry",
+      "2": "Wear dry",
+      "3": "Cupboard dry",
+      "4": "Extra dry",
+      "5": "Very dry"
+    }
+  },
+  "dryerWeight": {
+    "name": "Dryer weight",
+    "control": "sensor",
+    "report": "6D01",
+    "unit": "kg",
+    "options": null
   }
 };
 

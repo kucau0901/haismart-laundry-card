@@ -50,6 +50,21 @@ export interface ProgrammeInfo {
   lastChanged?: number;
 }
 
+/** One setting the drum is running with, for the details row. */
+export type DetailKey = "programme" | "temp" | "spin" | "load" | "heat" | "dryness";
+
+export interface DrumDetail {
+  key: DetailKey;
+  /** The published number (temperature, rpm, kg) or option value. */
+  value: number;
+  /** The option's label, as the entity provides it (enums only). */
+  label?: string;
+  /** Older component only (no haier_value): the entity's own unit, which Home Assistant may have
+   * converted (°F, lb). The number is then that converted reading, so the unit must travel with it. */
+  unit?: string;
+  entity?: string;
+}
+
 export interface DrumModel {
   key: DrumKey;
   status: DrumStatus;
@@ -92,6 +107,8 @@ export interface DrumModel {
   /** Washer 8/9 while done-like: replaces the support line. */
   blockingNotice?: Notice;
   steps: StepView[] | null;
+  /** Programme, temperature, spin, load...: what the drum is running with, in display order. */
+  details: DrumDetail[];
   finishedAt?: number;
   /** Button entity ids that exist and are not unavailable. */
   buttons: { start?: string; pause?: string; cancel?: string };
@@ -176,6 +193,8 @@ interface DrumAttrs {
   doorLock: string;
   power: string;
   remaining: string[];
+  /** The details row's settings, in display order (after the programme). */
+  details: Array<[DetailKey, string]>;
   buttons: Record<"start" | "pause" | "cancel", ButtonKey>;
 }
 
@@ -190,6 +209,11 @@ export const DRUM_ATTRS: Record<DrumKey, DrumAttrs> = {
     doorLock: "washerDoorLockStatus",
     power: "washerPowerStatus",
     remaining: ["remainingTimeHH", "remainingTimeMM"],
+    details: [
+      ["temp", "washTemp"],
+      ["spin", "spinSpeed"],
+      ["load", "washerActualWeight"],
+    ],
     buttons: { start: "washer_start", pause: "washer_pause", cancel: "washer_cancel" },
   },
   dryer: {
@@ -202,6 +226,11 @@ export const DRUM_ATTRS: Record<DrumKey, DrumAttrs> = {
     doorLock: "dryerDoorLockStatus",
     power: "dryerPowerStatus",
     remaining: ["dryerRemainingDryTime", "dryerRemainingResnTime", "remainingAntiCreaseTime"],
+    details: [
+      ["heat", "dryerTempLevel"],
+      ["dryness", "dryerDryLevel"],
+      ["load", "dryerWeight"],
+    ],
     buttons: { start: "dryer_start", pause: "dryer_pause", cancel: "dryer_cancel" },
   },
 };
@@ -325,6 +354,39 @@ const ts = (s: string | undefined): number | undefined => {
   const v = Date.parse(s);
   return Number.isFinite(v) ? v : undefined;
 };
+
+// ---------------------------------------------------------------------------------------------
+// Details row
+
+/**
+ * What the drum is running with: its programme, then the settings DRUM_ATTRS lists. A setting the
+ * machine does not report (unavailable, or a null value) is left out rather than shown as "–";
+ * a load of 0 kg is "not weighed yet", so it is left out too. Temperature and spin keep 0: the
+ * panel offers cold water and no spin.
+ */
+function drumDetails(r: Reader, A: DrumAttrs, programme: ProgrammeInfo): DrumDetail[] {
+  const out: DrumDetail[] = [];
+  if (programme.value) out.push({ key: "programme", value: programme.value, label: programme.label, entity: programme.entity });
+  for (const [key, attr] of A.details) {
+    const rd = r.read(attr);
+    const v = rd.value;
+    const value = typeof v === "number" && Number.isFinite(v) ? v : undefined;
+    if (value === undefined || value < 0 || (key === "load" && value === 0)) continue;
+    const options = CONTRACT[attr]?.options;
+    let label: string | undefined;
+    if (options) {
+      // An enum: the entity's own option text (English; states are not translated), else the
+      // contract's. The view swaps in its own translation where it has one.
+      label =
+        rd.entity && "haier_value" in (rd.entity.attributes ?? {}) ? rd.entity.state : options[String(value)];
+      if (!label) continue;
+    }
+    const uom = rd.entity?.attributes?.unit_of_measurement;
+    const unit = rd.fromLabel && typeof uom === "string" && uom ? uom : undefined;
+    out.push({ key, value, label, unit, entity: rd.eid });
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------------------------------------
 // Steps (§4.4)
@@ -656,12 +718,14 @@ export function derive(hass: HomeAssistant, index: DeviceIndex, opts: DeriveOpti
       notices,
       blockingNotice,
       steps: null,
+      details: [],
       finishedAt,
       buttons: { start: btn(A.buttons.start), pause: btn(A.buttons.pause), cancel: btn(A.buttons.cancel) },
       isActive,
       isDoneLike,
     };
     model.steps = computeSteps(model, hasDry);
+    model.details = drumDetails(r, A, programme);
     return model;
   };
 

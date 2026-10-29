@@ -474,6 +474,57 @@ export const cardStyles = css`
     color: var(--hlc-muted);
     margin-top: -6px;
   }
+  /* ---------------------------------------------------------------- details row */
+  /* What the drum is running with: quiet, wrapping, each one a tap target for its entity. */
+  .details {
+    list-style: none;
+    margin: -2px 0 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+  }
+  .details li {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .detail {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 100%;
+    min-height: 24px;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: 400 13px/1.3 var(--hlc-font);
+    font-variant-numeric: tabular-nums;
+    color: var(--hlc-text);
+    cursor: pointer;
+    position: relative;
+    border-radius: 4px;
+  }
+  .detail::after {
+    /* 30px-tall hit area: no more than half the row gap, so wrapped rows never overlap. */
+    content: "";
+    position: absolute;
+    inset: -3px -6px;
+  }
+  .detail:disabled {
+    cursor: default;
+  }
+  .detail ha-icon {
+    --mdc-icon-size: 16px;
+    color: var(--hlc-muted);
+    flex: none;
+  }
+  .detail span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   /* Chip, then its duration on the same line; the hint (no programme yet) below. */
   .prog-line {
     display: flex;
