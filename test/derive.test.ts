@@ -759,7 +759,9 @@ describe("review follow-ups: model", () => {
       resolveDevice(hass, { device_id: MOCK_DEVICE_ID });
     }
     const per = (performance.now() - t0) / runs;
-    expect(per).toBeLessThan(2); // was ~85-118 ms before the row map
+    // Was ~85-118 ms before the row map and is well under 1 ms locally. Shared CI runners measured
+    // 2.5-2.7 ms, so the budget only needs to catch a return to the old O(entities) scan.
+    expect(per).toBeLessThan(20);
     expect(resolveDevice(hass, {})).toMatchObject({ kind: "ok", deviceId: MOCK_DEVICE_ID });
     expect(resolveDevice(hass, { device_id: MOCK_DEVICE_ID })).toMatchObject({ kind: "ok", candidates: [MOCK_DEVICE_ID] });
     expect(resolveDevice(hass, { device_id: "dev-0" })).toMatchObject({ kind: "not_laundry" });

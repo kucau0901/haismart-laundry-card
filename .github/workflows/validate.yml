@@ -20,3 +20,6 @@ jobs:
       - uses: hacs/action@main
         with:
           category: plugin
+          # No screenshot yet: the card has only been verified in the mocked demo. Drop this once a
+          # real Home Assistant screenshot is in the README (HACS default-list submission needs it).
+          ignore: images
